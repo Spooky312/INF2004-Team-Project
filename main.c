@@ -7,12 +7,12 @@
 #include "task.h"
 #include "semphr.h" // For Mutexes
 
-// Include all Demo 1 driver headers
-#include "drivers/motor/motor.h"
-#include "drivers/encoder/encoder.h"
-#include "drivers/mqtt/wifi_mqtt.h"
-#include "drivers/imu/imu.h"
-#include "drivers/pid/pid.h"
+// Include all Demo 1 driver headers (using corrected paths)
+#include "motor.h"
+#include "encoder.h"
+#include "wifi_mqtt.h"
+#include "imu.h"
+#include "pid.h"
 
 // --- Task Priorities ---
 #define PID_TASK_PRIORITY       (configMAX_PRIORITIES - 1) // Highest priority
@@ -44,14 +44,15 @@ void pid_task(void *params) {
 
     // Set the initial target speed
     pid_set_target_rpm(TARGET_DEMO_RPM, TARGET_DEMO_RPM);
-    
-    // Get the starting heading from the IMU
+
+    // Get the starting heading from the IMU after a short delay for sensor settling
+    vTaskDelay(pdMS_TO_TICKS(100)); // Allow IMU to stabilize
     if (xSemaphoreTake(g_data_mutex, portMAX_DELAY) == pdTRUE) {
         g_target_heading = imu_get_filtered_heading();
         pid_set_target_heading(g_target_heading);
         xSemaphoreGive(g_data_mutex);
     }
-    printf("PID Task: Target RPM=%.1f, Target Heading=%.1f\n", TARGET_DEMO_RPM, g_target_heading);
+    printf("PID Task: Target RPM=%.1f, Initial Target Heading=%.1f\n", TARGET_DEMO_RPM, g_target_heading);
 
 
     for (;;) {
@@ -59,13 +60,16 @@ void pid_task(void *params) {
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
 
         // Take the mutex to gain exclusive access to sensor/PID data
-        if (xSemaphoreTake(g_data_mutex, portMAX_DELAY) == pdTRUE) {
-            
+        if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(5)) == pdTRUE) { // Wait max 5ms for mutex
+
             // Run the main controller logic
             pid_controller_run();
-            
+
             // Release the mutex
             xSemaphoreGive(g_data_mutex);
+        } else {
+             printf("PID Task: Failed to get mutex!\n");
+             // Handle mutex acquisition failure if necessary (e.g., skip control iteration)
         }
     }
 }
@@ -87,26 +91,30 @@ void telemetry_task(void *params) {
         }
 
         // Local variables to hold data
-        float current_rpm_l, current_rpm_r, distance, heading_filt;
-        
+        float current_rpm_l = 0.0, current_rpm_r = 0.0, distance = 0.0, heading_filt = 0.0;
+
         // Take the mutex to safely read all sensor data at once
-        if (xSemaphoreTake(g_data_mutex, portMAX_DELAY) == pdTRUE) {
+        if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) { // Wait max 50ms for mutex
             current_rpm_l = encoder_get_left_rpm();
             current_rpm_r = encoder_get_right_rpm();
             distance = encoder_get_distance_m();
             heading_filt = imu_get_filtered_heading();
             xSemaphoreGive(g_data_mutex);
-        }
 
-        // Format data into a JSON string
-        char telemetry_msg[256];
-        snprintf(telemetry_msg, sizeof(telemetry_msg),
-                 "{\"rpm_l\": %.2f, \"rpm_r\": %.2f, \"dist\": %.2f, \"heading_filt\": %.2f}",
-                 current_rpm_l, current_rpm_r, distance, heading_filt);
-        
-        // Publish the data
-        mqtt_publish_telemetry(telemetry_msg);
-        printf("Telemetry: %s\n", telemetry_msg);
+            // Format data into a JSON string
+            char telemetry_msg[256];
+            snprintf(telemetry_msg, sizeof(telemetry_msg),
+                     "{\"rpm_l\": %.2f, \"rpm_r\": %.2f, \"dist\": %.2f, \"heading_filt\": %.2f}",
+                     current_rpm_l, current_rpm_r, distance, heading_filt);
+
+            // Publish the data
+            mqtt_publish_telemetry(telemetry_msg);
+            printf("Telemetry: %s\n", telemetry_msg);
+
+        } else {
+            printf("Telemetry Task: Failed to get mutex!\n");
+            // Skip publishing if mutex wasn't acquired
+        }
     }
 }
 
@@ -114,15 +122,21 @@ void telemetry_task(void *params) {
  * @brief Low-priority task for managing the MQTT connection state.
  */
 void mqtt_task(void *params) {
-    printf("Connecting to MQTT...\n");
+    printf("MQTT Task: Waiting for Wi-Fi...\n");
+    // Ensure Wi-Fi is up before attempting MQTT connection. wifi_init is called before scheduler.
+    // Small delay might be good practice.
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    printf("MQTT Task: Connecting to MQTT broker...\n");
     mqtt_connect();
 
     for (;;) {
         // This function checks Wi-Fi and MQTT status and reconnects if needed.
+        // It's designed to be called periodically.
         mqtt_check_reconnect();
-        
-        // Check connection status every 2 seconds
-        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        // Check connection status every 5 seconds
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
 
@@ -135,22 +149,22 @@ int main() {
     sleep_ms(3000); // Wait for serial monitor to connect
     printf("=== Demo 1: Basic Motion & Telemetry (FreeRTOS) ===\n");
 
-    // 1. Initialize all hardware
-    printf("Initializing Hardware...\n");
-    motor_init();
-    encoder_init();
-    if (!imu_driver_init()) {
-        printf("!! IMU Init Failed. Halting. !!\n");
-        while (true);
-    }
-    pid_init();
-
-    // 2. Initialize Wi-Fi (must be done before starting scheduler)
+    // 1. Initialize Wi-Fi FIRST (required by cyw43_arch_lwip_sys_freertos)
     printf("Initializing WiFi...\n");
-    if (wifi_init() != 0) {
+    if (wifi_init() != 0) { // Call wifi_init from wifi_mqtt.c
         printf("!! Wi-Fi Init Failed. Halting. !!\n");
         while (true);
     }
+
+    // 2. Initialize other hardware
+    printf("Initializing Hardware...\n");
+    motor_init();       // From motor.c
+    encoder_init();     // From encoder.c
+    if (!imu_driver_init()) { // From imu.c
+        printf("!! IMU Init Failed. Halting. !!\n");
+        while (true);
+    }
+    pid_init();         // From pid.c
 
     // 3. Create global mutex
     g_data_mutex = xSemaphoreCreateMutex();
@@ -161,9 +175,15 @@ int main() {
 
     // 4. Create Tasks
     printf("Creating FreeRTOS tasks...\n");
-    xTaskCreate(pid_task, "PID_Task", configMINIMAL_STACK_SIZE * 2, NULL, PID_TASK_PRIORITY, NULL);
-    xTaskCreate(telemetry_task, "Telemetry_Task", configMINIMAL_STACK_SIZE * 2, NULL, TELEMETRY_TASK_PRIORITY, NULL);
-    xTaskCreate(mqtt_task, "MQTT_Task", configMINIMAL_STACK_SIZE * 2, NULL, MQTT_TASK_PRIORITY, NULL);
+    BaseType_t pid_status = xTaskCreate(pid_task, "PID_Task", configMINIMAL_STACK_SIZE * 2, NULL, PID_TASK_PRIORITY, NULL);
+    BaseType_t tel_status = xTaskCreate(telemetry_task, "Telemetry_Task", configMINIMAL_STACK_SIZE * 2, NULL, TELEMETRY_TASK_PRIORITY, NULL);
+    BaseType_t mq_status  = xTaskCreate(mqtt_task, "MQTT_Task", configMINIMAL_STACK_SIZE * 2, NULL, MQTT_TASK_PRIORITY, NULL);
+
+    if (pid_status != pdPASS || tel_status != pdPASS || mq_status != pdPASS) {
+        printf("!! Failed to create one or more tasks. Halting. !!\n");
+         while(true);
+    }
+
 
     // 5. Start the scheduler
     printf("Starting FreeRTOS scheduler...\n");
