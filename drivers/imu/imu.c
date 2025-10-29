@@ -1,361 +1,181 @@
-/**
- * @file imu_driver.c
- * @brief IMU driver implementation for LSM303DLHC
- */
-
+// ===============================================
+//  Module: IMU (LSM303DLHC) Driver
+//  Description: I2C bring-up, raw accel/mag reads,
+//               tilt/heading helpers, EMA-filtered heading.
+// ===============================================
 #include "imu.h"
-#include "pico/stdlib.h"
+#include <math.h>
 #include <string.h>
-#include <math.h> // For atan2
-#include <stdio.h> // <-- ADDED THIS LINE
 
-#define I2C_TIMEOUT_US  100000
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+// ---- LSM303DLHC I2C addresses ----
+#define LSM_ACC_ADDR         0x19   // SA0_A = 1 typical
+#define LSM_MAG_ADDR         0x1E
 
-// Global config object for the driver
-static imu_config_t _imu_cfg;
-static imu_data_t _imu_data_cache; // Cache for holding last good data
+// ---- Accelerometer registers ----
+#define A_CTRL_REG1          0x20   // ODR, enable axes
+#define A_CTRL_REG4          0x23   // full-scale, high-res
+#define A_OUT_X_L            0x28   // auto-increment from here
 
-/* ============================================================================
- * ALL LOW-LEVEL ACCELEROMETER FUNCTIONS (Copy from your original imu.c)
- * ============================================================================ */
+// ---- Magnetometer registers ----
+#define M_CRA_REG            0x00   // data rate
+#define M_CRB_REG            0x01   // gain
+#define M_MR_REG             0x02   // mode
+#define M_OUT_X_H            0x03   // X H, X L, Z H, Z L, Y H, Y L
 
-bool
-imu_write_register(imu_config_t const * const p_config,
-                   uint8_t const reg,
-                   uint8_t const value)
-{
-    uint8_t buffer[2];
-    int result;
-
-    if (NULL == p_config || NULL == p_config->i2c_port) return false;
-
-    buffer[0] = reg;
-    buffer[1] = value;
-
-    result = i2c_write_timeout_us(p_config->i2c_port,
-                                  IMU_ACCEL_ADDR,
-                                  buffer,
-                                  2,
-                                  false,
-                                  I2C_TIMEOUT_US);
-    return (result == 2);
+// ---- Helpers ----
+static inline int i2c_w1(uint8_t addr, uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = {reg, val};
+    return i2c_write_blocking(IMU_I2C, addr, buf, 2, false);
+}
+static inline int i2c_rn(uint8_t addr, uint8_t reg, uint8_t *dst, size_t n) {
+    i2c_write_blocking(IMU_I2C, addr, &reg, 1, true);
+    return i2c_read_blocking(IMU_I2C, addr, dst, n, false);
 }
 
-bool
-imu_read_register(imu_config_t const * const p_config,
-                  uint8_t const reg,
-                  uint8_t * const p_value)
+// ---- State ----
+static float ema_heading_deg = 0.0f;
+static bool  ema_inited = false;
+static float last_pitch_deg = 0.0f, last_roll_deg = 0.0f;
+
+// ---- Simple clamp ----
+static inline float clampf(float x, float lo, float hi){ return x<lo?lo:(x>hi?hi:x); }
+
+// ---- Bring-up ----
+void imu_init(void)
 {
-    int result;
+    // I2C pins + speed
+    i2c_init(IMU_I2C, IMU_I2C_BAUD_HZ);
+    gpio_set_function(IMU_I2C_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(IMU_I2C_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(IMU_I2C_SDA);
+    gpio_pull_up(IMU_I2C_SCL);
 
-    if (NULL == p_config || NULL == p_config->i2c_port || NULL == p_value) return false;
+    // Accelerometer: 100 Hz, all axes on
+    // CTRL_REG1_A: ODR=100Hz (0101), LPen=0, XYZ enable = 111 -> 0b01010111 = 0x57
+    i2c_w1(LSM_ACC_ADDR, A_CTRL_REG1, 0x57);
+    // CTRL_REG4_A: High-resolution, ±2g (00), BDU=0 -> 0x08
+    i2c_w1(LSM_ACC_ADDR, A_CTRL_REG4, 0x08);
 
-    result = i2c_write_timeout_us(p_config->i2c_port, IMU_ACCEL_ADDR, &reg, 1, true, I2C_TIMEOUT_US);
-    if (result != 1) return false;
+    // Magnetometer: 75 Hz, gain default, continuous-conversion
+    // CRA: DO=75Hz -> 0x18
+    i2c_w1(LSM_MAG_ADDR, M_CRA_REG, 0x18);
+    // CRB: Gain = default (1.3 gauss) -> 0x20
+    i2c_w1(LSM_MAG_ADDR, M_CRB_REG, 0x20);
+    // MR: Continuous convert -> 0x00
+    i2c_w1(LSM_MAG_ADDR, M_MR_REG, 0x00);
 
-    result = i2c_read_timeout_us(p_config->i2c_port, IMU_ACCEL_ADDR, p_value, 1, false, I2C_TIMEOUT_US);
-    return (result == 1);
+    ema_heading_deg = 0.0f;
+    ema_inited = false;
+    last_pitch_deg = last_roll_deg = 0.0f;
 }
 
-bool
-imu_init(imu_config_t const * const p_config)
+// ---- Raw reads ----
+bool imu_read_accel(float *ax_g, float *ay_g, float *az_g)
 {
-    uint8_t ctrl_reg1_val;
-    uint8_t ctrl_reg4_val;
-    bool success;
+    uint8_t out[6];
+    // Enable auto-increment by setting MSB of sub-address
+    if (i2c_rn(LSM_ACC_ADDR, (A_OUT_X_L | 0x80), out, 6) != 6) return false;
 
-    if (NULL == p_config || NULL == p_config->i2c_port) return false;
+    // 12-bit right-aligned in high-res mode: combine and sign-extend
+    int16_t x = (int16_t)((out[1] << 8) | out[0]) >> 4;
+    int16_t y = (int16_t)((out[3] << 8) | out[2]) >> 4;
+    int16_t z = (int16_t)((out[5] << 8) | out[4]) >> 4;
 
-    i2c_init(p_config->i2c_port, p_config->i2c_freq);
-    gpio_set_function(p_config->sda_pin, GPIO_FUNC_I2C);
-    gpio_set_function(p_config->scl_pin, GPIO_FUNC_I2C);
-    gpio_pull_up(p_config->sda_pin);
-    gpio_pull_up(p_config->scl_pin);
+    // Sensitivity: 1 mg/LSB at ±2g in HR mode -> 0.001 g/LSB
+    const float sens_g = 0.001f;
+    if (ax_g) *ax_g = x * sens_g;
+    if (ay_g) *ay_g = y * sens_g;
+    if (az_g) *az_g = z * sens_g;
+    return true;
+}
 
-    sleep_ms(10);
+bool imu_read_mag(float *mx_g, float *my_g, float *mz_g)
+{
+    uint8_t out[6];
+    if (i2c_rn(LSM_MAG_ADDR, M_OUT_X_H, out, 6) != 6) return false;
 
-    ctrl_reg1_val = IMU_ODR_50HZ | IMU_NORMAL_MODE | IMU_XYZ_ENABLE;
-    success = imu_write_register(p_config, IMU_CTRL_REG1_A, ctrl_reg1_val);
-    if (!success) return false;
+    // Note: order is X, Z, Y in this device!
+    int16_t x = (int16_t)((out[0] << 8) | out[1]);
+    int16_t z = (int16_t)((out[2] << 8) | out[3]);
+    int16_t y = (int16_t)((out[4] << 8) | out[5]);
 
-    switch (p_config->scale)
+    // Sensitivity for 1.3 gauss: 1100 LSB/gauss (X,Y), 980 LSB/gauss (Z)
+    const float sx = 1.0f / 1100.0f;
+    const float sy = 1.0f / 1100.0f;
+    const float sz = 1.0f / 980.0f;
+
+    if (mx_g) *mx_g = x * sx;
+    if (my_g) *my_g = y * sy;
+    if (mz_g) *mz_g = z * sz;
+    return true;
+}
+
+// ---- Pitch / Roll (from accel) ----
+static void compute_pitch_roll(float ax, float ay, float az, float *pitch_deg, float *roll_deg)
+{
+    // Protect against divide-by-zero
+    ax = clampf(ax, -1.9f, 1.9f);
+    ay = clampf(ay, -1.9f, 1.9f);
+    az = clampf(az, -1.9f, 1.9f);
+
+    // Roll around X, Pitch around Y
+    float roll  = atan2f(ay, az);
+    float pitch = atan2f(-ax, sqrtf(ay*ay + az*az));
+
+    if (pitch_deg) *pitch_deg = pitch * 180.0f / (float)M_PI;
+    if (roll_deg)  *roll_deg  = roll  * 180.0f / (float)M_PI;
+
+    last_pitch_deg = pitch * 180.0f / (float)M_PI;
+    last_roll_deg  = roll  * 180.0f / (float)M_PI;
+}
+
+void imu_get_pitch_roll_deg(float *pitch_deg, float *roll_deg)
+{
+    if (pitch_deg) *pitch_deg = last_pitch_deg;
+    if (roll_deg)  *roll_deg  = last_roll_deg;
+}
+
+// ---- Heading (raw + filtered) ----
+bool imu_get_heading_deg(float *heading_raw_deg, float *heading_filt_deg)
+{
+    float ax, ay, az, mx, my, mz;
+    if (!imu_read_accel(&ax, &ay, &az)) return false;
+    if (!imu_read_mag(&mx, &my, &mz))   return false;
+
+    // Tilt compensation (simple form using pitch/roll from accel)
+    float pitch_rad = 0.0f, roll_rad = 0.0f;
     {
-        case IMU_SCALE_2G:  ctrl_reg4_val = IMU_FS_2G;  break;
-        case IMU_SCALE_4G:  ctrl_reg4_val = IMU_FS_4G;  break;
-        case IMU_SCALE_8G:  ctrl_reg4_val = IMU_FS_8G;  break;
-        case IMU_SCALE_16G: ctrl_reg4_val = IMU_FS_16G; break;
-        default:            ctrl_reg4_val = IMU_FS_2G;  break;
+        float pd, rd;
+        compute_pitch_roll(ax, ay, az, &pd, &rd);
+        pitch_rad = pd * (float)M_PI / 180.0f;
+        roll_rad  = rd * (float)M_PI / 180.0f;
     }
-    ctrl_reg4_val |= IMU_HR_ENABLE;
 
-    success = imu_write_register(p_config, IMU_CTRL_REG4_A, ctrl_reg4_val);
-    if (!success) return false;
+    // Compensate mag readings
+    float mx_comp = mx * cosf(pitch_rad) + mz * sinf(pitch_rad);
+    float my_comp = mx * sinf(roll_rad)  * sinf(pitch_rad)
+                  + my * cosf(roll_rad)
+                  - mz * sinf(roll_rad)  * cosf(pitch_rad);
 
-    /* NOW INITIALIZE MAGNETOMETER */
-    success = imu_mag_init(p_config); // This call requires imu_mag_init prototype in imu.h
+    // Heading in radians, add declination
+    float heading = atan2f(-my_comp, mx_comp) + IMU_DECLINATION_RAD;
 
-    return success;
-}
+    // Normalize to [0, 2π)
+    if (heading < 0) heading += 2.0f * (float)M_PI;
+    if (heading >= 2.0f * (float)M_PI) heading -= 2.0f * (float)M_PI;
 
-bool
-imu_data_available(imu_config_t const * const p_config)
-{
-    uint8_t status;
-    bool success;
+    float heading_deg = heading * 180.0f / (float)M_PI;
 
-    if (NULL == p_config) return false;
+    // EMA filter
+    if (!ema_inited) {
+        ema_heading_deg = heading_deg;
+        ema_inited = true;
+    } else {
+        ema_heading_deg = (IMU_HEADING_EMA_ALPHA * heading_deg)
+                        + (1.0f - IMU_HEADING_EMA_ALPHA) * ema_heading_deg;
+    }
 
-    success = imu_read_register(p_config, IMU_STATUS_REG_A, &status);
-    if (!success) return false;
-
-    return ((status & IMU_ZYXDA) != 0);
-}
-
-bool
-imu_read_accel_raw(imu_config_t const * const p_config,
-                   imu_accel_raw_t * const p_data)
-{
-    uint8_t buffer[6];
-    uint8_t reg_addr;
-    int result;
-
-    if (NULL == p_config || NULL == p_config->i2c_port || NULL == p_data) return false;
-
-    reg_addr = IMU_OUT_X_L_A | IMU_AUTO_INCREMENT;
-
-    result = i2c_write_timeout_us(p_config->i2c_port, IMU_ACCEL_ADDR, &reg_addr, 1, true, I2C_TIMEOUT_US);
-    if (result != 1) return false;
-
-    result = i2c_read_timeout_us(p_config->i2c_port, IMU_ACCEL_ADDR, buffer, 6, false, I2C_TIMEOUT_US);
-    if (result != 6) return false;
-
-    p_data->x = (int16_t)(buffer[0] | (buffer[1] << 8));
-    p_data->y = (int16_t)(buffer[2] | (buffer[3] << 8));
-    p_data->z = (int16_t)(buffer[4] | (buffer[5] << 8));
-
+    if (heading_raw_deg)  *heading_raw_deg  = heading_deg;
+    if (heading_filt_deg) *heading_filt_deg = ema_heading_deg;
     return true;
-}
-
-
-/* ============================================================================
- * ALL LOW-LEVEL MAGNETOMETER FUNCTIONS (Copy from your original imu.c)
- * ============================================================================ */
-
-bool
-imu_mag_write_register(imu_config_t const * const p_config,
-                       uint8_t const reg,
-                       uint8_t const value)
-{
-    uint8_t buffer[2];
-    int result;
-
-    if (NULL == p_config || NULL == p_config->i2c_port) return false;
-
-    buffer[0] = reg;
-    buffer[1] = value;
-
-    /* NOTE: Using IMU_MAG_ADDR instead of IMU_ACCEL_ADDR */
-    result = i2c_write_timeout_us(p_config->i2c_port,
-                                  IMU_MAG_ADDR,
-                                  buffer,
-                                  2,
-                                  false,
-                                  I2C_TIMEOUT_US);
-
-    return (result == 2);
-}
-
-
-bool
-imu_mag_read_register(imu_config_t const * const p_config,
-                      uint8_t const reg,
-                      uint8_t * const p_value)
-{
-    int result;
-
-    if (NULL == p_config || NULL == p_config->i2c_port || NULL == p_value) return false;
-
-    result = i2c_write_timeout_us(p_config->i2c_port,
-                                  IMU_MAG_ADDR,
-                                  &reg,
-                                  1,
-                                  true,
-                                  I2C_TIMEOUT_US);
-
-    if (result != 1) return false;
-
-    result = i2c_read_timeout_us(p_config->i2c_port,
-                                 IMU_MAG_ADDR,
-                                 p_value,
-                                 1,
-                                 false,
-                                 I2C_TIMEOUT_US);
-
-    return (result == 1);
-}
-
-
-bool
-imu_mag_init(imu_config_t const * const p_config)
-{
-    uint8_t cra_val;   /* Config Register A value */
-    uint8_t crb_val;   /* Config Register B value */
-    uint8_t mr_val;    /* Mode Register value */
-    bool success;
-
-    if (NULL == p_config) return false;
-
-    /* STEP 1: Configure data rate in CRA register */
-    cra_val = IMU_MAG_ODR_15HZ;  /* 15 Hz update rate */
-    success = imu_mag_write_register(p_config, IMU_CRA_REG_M, cra_val);
-    if (!success) return false;
-
-    /* STEP 2: Configure gain/range in CRB register */
-    switch (p_config->mag_gain)
-    {
-        case IMU_MAG_GAIN_1_3_GAUSS: crb_val = IMU_MAG_GAIN_1_3; break;
-        case IMU_MAG_GAIN_1_9_GAUSS: crb_val = IMU_MAG_GAIN_1_9; break;
-        case IMU_MAG_GAIN_2_5_GAUSS: crb_val = IMU_MAG_GAIN_2_5; break;
-        case IMU_MAG_GAIN_4_0_GAUSS: crb_val = IMU_MAG_GAIN_4_0; break;
-        case IMU_MAG_GAIN_4_7_GAUSS: crb_val = IMU_MAG_GAIN_4_7; break;
-        case IMU_MAG_GAIN_5_6_GAUSS: crb_val = IMU_MAG_GAIN_5_6; break;
-        case IMU_MAG_GAIN_8_1_GAUSS: crb_val = IMU_MAG_GAIN_8_1; break;
-        default:                     crb_val = IMU_MAG_GAIN_1_3; break;
-    }
-    success = imu_mag_write_register(p_config, IMU_CRB_REG_M, crb_val);
-    if (!success) return false;
-
-    /* STEP 3: Set continuous conversion mode */
-    mr_val = IMU_MAG_CONTINUOUS;  /* Keep reading automatically */
-    success = imu_mag_write_register(p_config, IMU_MR_REG_M, mr_val);
-
-    return success;
-}
-
-bool
-imu_mag_data_available(imu_config_t const * const p_config)
-{
-    uint8_t status;
-    bool success;
-
-    if (NULL == p_config) return false;
-
-    success = imu_mag_read_register(p_config,
-                                    IMU_SR_REG_M,
-                                    &status);
-
-    if (!success) return false;
-
-    return ((status & IMU_MAG_DRDY) != 0);
-}
-
-
-bool
-imu_mag_read_raw(imu_config_t const * const p_config,
-                 imu_mag_raw_t * const p_data)
-{
-    uint8_t buffer[6];
-    uint8_t reg_addr;
-    int result;
-
-    if (NULL == p_config || NULL == p_config->i2c_port || NULL == p_data) return false;
-
-    reg_addr = IMU_OUT_X_H_M;
-
-    result = i2c_write_timeout_us(p_config->i2c_port,
-                                  IMU_MAG_ADDR,
-                                  &reg_addr,
-                                  1,
-                                  true,
-                                  I2C_TIMEOUT_US);
-
-    if (result != 1) return false;
-
-    result = i2c_read_timeout_us(p_config->i2c_port,
-                                 IMU_MAG_ADDR,
-                                 buffer,
-                                 6,
-                                 false,
-                                 I2C_TIMEOUT_US);
-
-    if (result != 6) return false;
-
-    p_data->x = (int16_t)((buffer[0] << 8) | buffer[1]);
-    p_data->z = (int16_t)((buffer[2] << 8) | buffer[3]);
-    p_data->y = (int16_t)((buffer[4] << 8) | buffer[5]);
-
-    return true;
-}
-
-
-/* ============================================================================
- * NEW HIGH-LEVEL API FUNCTIONS
- * ============================================================================ */
-
-bool imu_driver_init(void) {
-    _imu_cfg.i2c_port = IMU_I2C_PORT;
-    _imu_cfg.sda_pin = IMU_SDA_PIN;
-    _imu_cfg.scl_pin = IMU_SCL_PIN;
-    _imu_cfg.i2c_freq = IMU_I2C_FREQ;
-    _imu_cfg.scale = IMU_SCALE_2G;
-    _imu_cfg.mag_gain = IMU_MAG_GAIN_1_3_GAUSS;
-
-    return imu_init(&_imu_cfg);
-}
-
-bool imu_get_all_data(imu_data_t *p_data) {
-    if (NULL == p_data) return false;
-
-    if (!imu_read_accel_raw(&_imu_cfg, &p_data->accel)) {
-        printf("Failed to read accel\n"); // Now printf is valid
-        return false;
-    }
-
-    if (!imu_mag_read_raw(&_imu_cfg, &p_data->mag)) {
-        printf("Failed to read mag\n"); // Now printf is valid
-        return false;
-    }
-
-    p_data->heading_deg = imu_calculate_heading(p_data);
-    return true;
-}
-
-float imu_calculate_heading(imu_data_t *p_data) {
-    // Basic atan2 calculation, does not account for tilt
-    float mag_x = (float)p_data->mag.x;
-    float mag_y = (float)p_data->mag.y;
-
-    // TODO: Add magnetometer calibration offsets if needed
-    // mag_x -= X_OFFSET;
-    // mag_y -= Y_OFFSET;
-
-    float heading_rad = atan2(mag_y, mag_x);
-    float heading_deg = heading_rad * 180.0 / M_PI;
-
-    // Normalize to 0-360 degrees
-    if (heading_deg < 0) {
-        heading_deg += 360.0;
-    }
-    // You might need to add an offset depending on sensor orientation
-    // heading_deg += DECLINATION_OFFSET;
-    // if (heading_deg >= 360.0) heading_deg -= 360.0;
-
-    return heading_deg;
-}
-
-float imu_get_filtered_heading(void) {
-    // This function is called from within a mutex in main.c,
-    // so it's generally safe to update the cache here.
-    if (imu_get_all_data(&_imu_data_cache)) {
-        // For Demo 1, "filtered" is just the raw calculated heading.
-        // For Week 10 demo, implement a Complementary or Kalman filter here
-        // using _imu_data_cache.accel data for tilt compensation.
-        return _imu_data_cache.heading_deg;
-    }
-
-    // Return last known heading on failure
-    return _imu_data_cache.heading_deg;
 }

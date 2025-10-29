@@ -1,167 +1,66 @@
+// ===============================================
+//  Module: PID Controller
+//  Description: Implements discrete PID loops for speed and heading control.
+// ===============================================
 #include "pid.h"
-#include "encoder.h" // Corrected path
-#include "motor.h"   // Corrected path
-#include "imu.h"     // Corrected path
-#include "pico/stdlib.h"
-#include <stdio.h>
 
-// ============================================================================
-// !! CRITICAL !! - PID GAIN TUNING
-// ============================================================================
-// --- Gains for Wheel Speed (RPM) Control ---
-#define PID_SPEED_KP 0.02f
-#define PID_SPEED_KI 0.01f
-#define PID_SPEED_KD 0.001f
+// ---- Tunable gains ----
+// Adjust these empirically for your platform.
+static float kp_speed   = 0.45f;
+static float ki_speed   = 0.05f;
+static float kd_speed   = 0.02f;
 
-// --- Gains for Heading (IMU) Control ---
-#define PID_HEADING_KP 0.01f
-#define PID_HEADING_KI 0.005f
-#define PID_HEADING_KD 0.0f
+static float kp_heading = 1.20f;
+static float ki_heading = 0.00f;
+static float kd_heading = 0.05f;
 
-// --- PID Output Clamping ---
-#define PID_OUTPUT_MAX 1.0f
-#define PID_OUTPUT_MIN -1.0f
-#define PID_INTEGRAL_MAX 1.0f
-#define PID_INTEGRAL_MIN -1.0f
+// ---- Internal PID states ----
+static float speed_integral = 0.0f;
+static float prev_speed_err = 0.0f;
 
+static float heading_integral = 0.0f;
+static float prev_heading_err = 0.0f;
 
-// ============================================================================
-// Internal Definitions (These were missing, causing 'undeclared' errors)
-// ============================================================================
-/**
- * @brief Holds the state for a single PID controller instance.
- */
-typedef struct {
-    float Kp, Ki, Kd;       // Gains
-    float integral;         // Accumulated integral error
-    float prev_error;       // Error from the last cycle
-    float setpoint;         // The target value (e.g., target RPM)
-    uint64_t last_time_us;  // Last time this PID was calculated (in us)
-} pid_state_t;
-
-// --- Controller Instances ---
-static pid_state_t pid_speed_left;
-static pid_state_t pid_speed_right;
-static pid_state_t pid_heading;
-
-/**
- * @brief Helper function to initialize a pid_state_t struct
- */
-static void pid_state_init(pid_state_t *pid, float Kp, float Ki, float Kd, float setpoint) {
-    pid->Kp = Kp;
-    pid->Ki = Ki;
-    pid->Kd = Kd;
-    pid->setpoint = setpoint;
-    pid->integral = 0.0f;
-    pid->prev_error = 0.0f;
-    pid->last_time_us = time_us_64();
+// ---- Initialization ----
+void pid_init(void)
+{
+    speed_integral = 0.0f;
+    prev_speed_err = 0.0f;
+    heading_integral = 0.0f;
+    prev_heading_err = 0.0f;
 }
 
-/**
- * @brief Clamps a value between a min and a max.
- */
-static inline float clamp(float value, float min, float max) {
-    if (value > max) return max;
-    if (value < min) return min;
-    return value;
-}
+// ---- Speed PID ----
+float pid_compute_speed(float target_speed, float measured_speed)
+{
+    float error = target_speed - measured_speed;
+    speed_integral += error;
+    float derivative = error - prev_speed_err;
+    prev_speed_err = error;
 
-/**
- * @brief Calculates the PID output for one controller.
- */
-static float pid_calculate(pid_state_t *pid, float current_value, float dt_s) {
-    // 1. Calculate error
-    float error = pid->setpoint - current_value;
+    float output = (kp_speed * error) + (ki_speed * speed_integral) + (kd_speed * derivative);
 
-    // Special handling for heading wrap-around (e.g., 359 -> 1 degree)
-    if (pid == &pid_heading) {
-        if (error > 180.0f)      error -= 360.0f;
-        else if (error < -180.0f) error += 360.0f;
-    }
+    // Anti-windup limit for integral term
+    if (speed_integral > 200.0f) speed_integral = 200.0f;
+    if (speed_integral < -200.0f) speed_integral = -200.0f;
 
-    // 2. Proportional term
-    float P = pid->Kp * error;
-
-    // 3. Integral term (with anti-windup)
-    // Avoid division by zero if dt_s is too small or zero
-    if (dt_s > 1e-9) { // Check if dt_s is practically non-zero
-        pid->integral += error * dt_s;
-        pid->integral = clamp(pid->integral, PID_INTEGRAL_MIN, PID_INTEGRAL_MAX);
-    }
-    float I = pid->Ki * pid->integral;
-
-    // 4. Derivative term
-    float derivative = 0.0f;
-     if (dt_s > 1e-9) { // Avoid division by zero
-        derivative = (error - pid->prev_error) / dt_s;
-     }
-    pid->prev_error = error; // Update previous error regardless
-    float D = pid->Kd * derivative;
-
-
-    // 5. Calculate total output
-    float output = P + I + D;
     return output;
 }
-// ============================================================================
 
+// ---- Heading PID ----
+float pid_compute_heading(float heading_error)
+{
+    heading_integral += heading_error;
+    float derivative = heading_error - prev_heading_err;
+    prev_heading_err = heading_error;
 
-// ============================================================================
-// PUBLIC API FUNCTIONS
-// ============================================================================
+    float output = (kp_heading * heading_error) +
+                   (ki_heading * heading_integral) +
+                   (kd_heading * derivative);
 
-void pid_init(void) {
-    // Now calls the static helper function defined above
-    pid_state_init(&pid_speed_left, PID_SPEED_KP, PID_SPEED_KI, PID_SPEED_KD, 0.0f);
-    pid_state_init(&pid_speed_right, PID_SPEED_KP, PID_SPEED_KI, PID_SPEED_KD, 0.0f);
-    pid_state_init(&pid_heading, PID_HEADING_KP, PID_HEADING_KI, PID_HEADING_KD, 0.0f);
-}
+    // Clamp output for motor correction range
+    if (output > 100.0f) output = 100.0f;
+    if (output < -100.0f) output = -100.0f;
 
-void pid_set_target_rpm(float left_rpm, float right_rpm) {
-    // Now uses the static variable defined above
-    pid_speed_left.setpoint = left_rpm;
-    pid_speed_right.setpoint = right_rpm;
-}
-
-void pid_set_target_heading(float heading) {
-     // Now uses the static variable defined above
-    pid_heading.setpoint = heading;
-}
-
-void pid_controller_run(void) {
-    // This function is called from pid_task, already inside a mutex
-
-    // --- 1. Get current time and calculate deltas (dt) ---
-    uint64_t now_us = time_us_64();
-    // Now uses the static variables defined above
-    float dt_speed_l = (now_us - pid_speed_left.last_time_us) / 1e6f;
-    float dt_speed_r = (now_us - pid_speed_right.last_time_us) / 1e6f;
-    float dt_heading = (now_us - pid_heading.last_time_us) / 1e6f;
-    pid_speed_left.last_time_us = now_us;
-    pid_speed_right.last_time_us = now_us;
-    pid_heading.last_time_us = now_us;
-
-    // --- 2. Get Sensor Feedback ---
-    float current_rpm_l = encoder_get_left_rpm();
-    float current_rpm_r = encoder_get_right_rpm();
-    float current_heading = imu_get_filtered_heading(); // From imu.c
-
-    // --- 3. Run PID Calculations ---
-    // Now calls the static helper function defined above
-    float speed_output_l = pid_calculate(&pid_speed_left, current_rpm_l, dt_speed_l);
-    float speed_output_r = pid_calculate(&pid_speed_right, current_rpm_r, dt_speed_r);
-    float heading_correction = pid_calculate(&pid_heading, current_heading, dt_heading);
-
-    // --- 4. Combine Outputs ---
-    float final_output_l = speed_output_l - heading_correction;
-    float final_output_r = speed_output_r + heading_correction;
-
-    // --- 5. Clamp Final Outputs ---
-    // Now calls the static helper function defined above
-    final_output_l = clamp(final_output_l, PID_OUTPUT_MIN, PID_OUTPUT_MAX);
-    final_output_r = clamp(final_output_r, PID_OUTPUT_MIN, PID_OUTPUT_MAX);
-
-    // --- 6. Set Motor Speeds ---
-    set_robo_motor(final_output_l, PWM_M1A, PWM_M1B); // Ensure motor.h defines these pins
-    set_robo_motor(final_output_r, PWM_M2A, PWM_M2B); // Ensure motor.h defines these pins
+    return output;
 }

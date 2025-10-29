@@ -1,49 +1,45 @@
+// ===============================================
+//  Module: Motor Driver
+//  Description: PWM control for left and right DC motors.
+// ===============================================
 #include "motor.h"
-#include "hardware/pwm.h"
-#include "hardware/gpio.h"
-#include <stdlib.h> // for abs()
 
-// Helper function to initialize one PWM slice
-static void init_pwm_pin(uint gpio) {
-    gpio_set_function(gpio, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(gpio);
-    static bool slice_initialized[NUM_PWM_SLICES] = {false};
+#define MOTOR_L_PWM 14
+#define MOTOR_R_PWM 15
 
-    if (!slice_initialized[slice]) {
-        // 20 kHz, ~13-bit resolution
-        pwm_set_wrap(slice, 6249); 
-        pwm_set_clkdiv(slice, 1.0f);
-        pwm_set_enabled(slice, true);
-        slice_initialized[slice] = true;
-    }
+static uint slice_l, chan_l, slice_r, chan_r;
+
+static uint16_t speed_to_pwm(float speed)
+{
+    if (speed < 0) speed = 0;
+    if (speed > 255) speed = 255;
+    return (uint16_t)((speed / 255.0f) * 65535);
 }
 
-void motor_init(void) {
-    init_pwm_pin(PWM_M1A);
-    init_pwm_pin(PWM_M1B);
-    init_pwm_pin(PWM_M2A);
-    init_pwm_pin(PWM_M2B);
+void motor_init(void)
+{
+    gpio_set_function(MOTOR_L_PWM, GPIO_FUNC_PWM);
+    gpio_set_function(MOTOR_R_PWM, GPIO_FUNC_PWM);
+
+    slice_l = pwm_gpio_to_slice_num(MOTOR_L_PWM);
+    chan_l  = pwm_gpio_to_channel(MOTOR_L_PWM);
+    slice_r = pwm_gpio_to_slice_num(MOTOR_R_PWM);
+    chan_r  = pwm_gpio_to_channel(MOTOR_R_PWM);
+
+    pwm_set_wrap(slice_l, 65535);
+    pwm_set_wrap(slice_r, 65535);
+    pwm_set_enabled(slice_l, true);
+    pwm_set_enabled(slice_r, true);
 }
 
-void set_robo_motor(float speed_percent, uint pinA, uint pinB) {
-    uint sliceA = pwm_gpio_to_slice_num(pinA);
-    uint chanA  = pwm_gpio_to_channel(pinA);
-    uint sliceB = pwm_gpio_to_slice_num(pinB);
-    uint chanB  = pwm_gpio_to_channel(pinB);
+void motor_set_speed(float left_speed, float right_speed)
+{
+    pwm_set_chan_level(slice_l, chan_l, speed_to_pwm(left_speed));
+    pwm_set_chan_level(slice_r, chan_r, speed_to_pwm(right_speed));
+}
 
-    uint16_t top = pwm_hw->slice[sliceA].top;
-
-    if (speed_percent > 1.0f) speed_percent = 1.0f;
-    if (speed_percent < -1.0f) speed_percent = -1.0f;
-
-    if (speed_percent > 0) { // Forward
-        pwm_set_chan_level(sliceA, chanA, (uint16_t)(speed_percent * top));
-        pwm_set_chan_level(sliceB, chanB, 0);
-    } else if (speed_percent < 0) { // Reverse
-        pwm_set_chan_level(sliceA, chanA, 0);
-        pwm_set_chan_level(sliceB, chanB, (uint16_t)(-speed_percent * top));
-    } else { // Stop
-        pwm_set_chan_level(sliceA, chanA, 0);
-        pwm_set_chan_level(sliceB, chanB, 0);
-    }
+void motor_stop(void)
+{
+    pwm_set_chan_level(slice_l, chan_l, 0);
+    pwm_set_chan_level(slice_r, chan_r, 0);
 }

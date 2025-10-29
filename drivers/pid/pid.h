@@ -1,9 +1,17 @@
+// ===============================================
+//  Module: PID Controller
+//  Description: Provides PID control logic for speed and heading loops.
+// ===============================================
 #ifndef PID_H
 #define PID_H
 
-void pid_init(void);
-void pid_set_target_rpm(float left_rpm, float right_rpm);
-void pid_set_target_heading(float heading);
-void pid_controller_run(void);
+#include "pico/stdlib.h"
 
-#endif // PID_H
+// ---- PID initialization ----
+void pid_init(void);
+
+// ---- Compute corrections ----
+float pid_compute_speed(float target_speed, float measured_speed);
+float pid_compute_heading(float heading_error);
+
+#endif
