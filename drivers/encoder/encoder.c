@@ -5,10 +5,11 @@
 // ===============================================
 #include "encoder.h"
 #include "hardware/timer.h"
+#include <stdio.h>
 
 // ---- User configuration ----
-#define ENCODER_LEFT_PIN   27   // Grove Port 5
-#define ENCODER_RIGHT_PIN  6  // Grove Port 6 (GP27, not GP7!)
+#define ENCODER_LEFT_PIN   27   // Grove Port 6
+#define ENCODER_RIGHT_PIN  6    // Grove Port 5
 #define TICKS_PER_REV      360.0f
 #define WHEEL_CIRCUM_M     0.21f
 #define RPM_TIMEOUT_US     500000  // 0.5 seconds - if no ticks, assume stopped
@@ -21,7 +22,7 @@ static float rpm_left = 0.0f, rpm_right = 0.0f;
 static float dist_left_m = 0.0f, dist_right_m = 0.0f;
 
 // ---- Interrupt handler ----
-static void encoder_irq_handler(uint gpio, uint32_t events)
+void encoder_irq_handler(uint gpio, uint32_t events)
 {
     absolute_time_t now = get_absolute_time();
 
@@ -45,44 +46,41 @@ static void encoder_irq_handler(uint gpio, uint32_t events)
     }
 }
 
-// ---- Initialization ----
 void encoder_init(void)
 {
     gpio_init(ENCODER_LEFT_PIN);
     gpio_set_dir(ENCODER_LEFT_PIN, GPIO_IN);
-    gpio_pull_down(ENCODER_LEFT_PIN);
+    gpio_pull_up(ENCODER_LEFT_PIN);   // <-- FIXED
 
     gpio_init(ENCODER_RIGHT_PIN);
     gpio_set_dir(ENCODER_RIGHT_PIN, GPIO_IN);
-    gpio_pull_down(ENCODER_RIGHT_PIN);
+    gpio_pull_up(ENCODER_RIGHT_PIN);  // <-- FIXED
 
-    // attach interrupts (rising edge)
-    gpio_set_irq_enabled_with_callback(
-        ENCODER_LEFT_PIN, GPIO_IRQ_EDGE_RISE, true, &encoder_irq_handler);
-    gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_RISE, true);
+    gpio_set_irq_enabled(ENCODER_LEFT_PIN, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
 
     last_left_time = last_right_time = get_absolute_time();
+    printf("[ENC] Encoder interrupts initialized.\n");
 }
 
+
 // ---- Accessors ----
-float encoder_get_rpm_left(void)  
-{ 
-    // Decay RPM to 0 if no recent ticks
+float encoder_get_rpm_left(void)
+{
     int64_t time_since_tick = absolute_time_diff_us(last_left_time, get_absolute_time());
     if (time_since_tick > RPM_TIMEOUT_US) {
         rpm_left = 0.0f;
     }
-    return rpm_left; 
+    return rpm_left;
 }
 
-float encoder_get_rpm_right(void) 
-{ 
-    // Decay RPM to 0 if no recent ticks
+float encoder_get_rpm_right(void)
+{
     int64_t time_since_tick = absolute_time_diff_us(last_right_time, get_absolute_time());
     if (time_since_tick > RPM_TIMEOUT_US) {
         rpm_right = 0.0f;
     }
-    return rpm_right; 
+    return rpm_right;
 }
 
 float encoder_get_distance_m(void)
@@ -90,7 +88,6 @@ float encoder_get_distance_m(void)
     return (dist_left_m + dist_right_m) / 2.0f;
 }
 
-// Add diagnostic function to get tick counts
 void encoder_get_ticks(uint32_t *left, uint32_t *right)
 {
     if (left) *left = left_ticks;

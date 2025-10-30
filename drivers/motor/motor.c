@@ -4,8 +4,9 @@
 // ===============================================
 #include "motor.h"
 
-// Motor A (right): GP8 (PWM), GP9 (DIR)
-// Motor B (left): GP10 (PWM), GP11 (DIR)
+// <-- FIX: Corrected comments to match defines
+// Motor A (left): GP8 (PWM), GP9 (DIR)
+// Motor B (right): GP10 (PWM), GP11 (DIR)
 #define MOTOR_R_PWM 10
 #define MOTOR_R_DIR 11
 #define MOTOR_L_PWM 8

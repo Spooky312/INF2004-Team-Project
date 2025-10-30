@@ -10,9 +10,11 @@ static float kp_speed   = 0.45f;
 static float ki_speed   = 0.05f;
 static float kd_speed   = 0.02f;
 
-static float kp_heading = 1.20f;
+// <-- FIX: Reduced heading gains to stop oscillation.
+// Start with these, then slowly increase Kp and Kd.
+static float kp_heading = 0.30f;  // Was 1.20f (very high)
 static float ki_heading = 0.00f;
-static float kd_heading = 0.05f;
+static float kd_heading = 0.10f;  // Was 0.05f
 
 // ---- Internal PID states ----
 static float speed_integral = 0.0f;
@@ -57,6 +59,10 @@ float pid_compute_heading(float heading_error)
     float output = (kp_heading * heading_error) +
                    (ki_heading * heading_integral) +
                    (kd_heading * derivative);
+
+    // Anti-windup limit for integral term
+    if (heading_integral > 50.0f) heading_integral = 50.0f;
+    if (heading_integral < -50.0f) heading_integral = -50.0f;
 
     // Clamp output for motor correction range
     if (output > 100.0f) output = 100.0f;

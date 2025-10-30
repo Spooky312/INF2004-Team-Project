@@ -38,6 +38,23 @@
 static float target_speed   = 80.0f;  // Reduced from 150 - adjust as needed (0-255)
 static float target_heading = 0.0f;
 
+
+static void gpio_irq_router(uint gpio, uint32_t events) {
+    encoder_irq_handler(gpio, events);
+    chg_direction_irq_handler(gpio, events);
+}
+
+void gpio_router_init(void) {
+    // Register shared callback ONCE
+    gpio_set_irq_enabled_with_callback(ENCODER_LEFT_PIN,
+        GPIO_IRQ_EDGE_FALL, true, &gpio_irq_router);
+
+    // Enable all relevant pins (already done in their inits)
+    gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
+}
+
+
 // -----------------------------------------------
 // PID Control Task
 // -----------------------------------------------
@@ -176,8 +193,12 @@ static void pid_task(void *p)
         // Debug output every 50 loops (1 second)
         if (++loop_count >= 50) {
             const char* state_names[] = {"STOPPED", "FORWARD", "BACKWARD"};
+            // <-- FIX: Added heading_raw and heading_filt to the debug print
             printf("[PID] %s: L=%.1f R=%.1f (tgt=%.1f rpm=%.1f)\n",
                    state_names[state], left_output, right_output, target_speed, avg_rpm);
+            printf("[PID] Head: Raw=%.2f Filt=%.2f Err=%.2f Corr=%.2f\n",
+                   heading_raw, heading_filt, heading_error, heading_corr);
+                   
             loop_count = 0;
         }
 
@@ -222,8 +243,8 @@ static void telemetry_task(void *p)
         // ENCODER DIAGNOSTIC - if ticks are 0, encoders aren't working!
         if (ticks_l == 0 && ticks_r == 0) {
             printf("[WARN] No encoder ticks detected! Check connections:\n");
-            printf("       Left encoder: GP6 (Grove Port 5)\n");
-            printf("       Right encoder: GP27 (Grove Port 6)\n");
+            printf("       Left encoder: GP27 (Grove Port 5)\n");
+            printf("       Right encoder: GP6 (Grove Port 6)\n");
         }
         
         // Only publish if WiFi/MQTT available
@@ -282,6 +303,8 @@ int main(void)
     encoder_init();
     imu_init();
     pid_init();
+
+    gpio_router_init(); 
 
 #if HAVE_CHG_DIRECTION
     chg_direction_init();

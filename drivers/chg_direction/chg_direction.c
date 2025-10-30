@@ -5,14 +5,14 @@
 // ===============================================
 #include "chg_direction.h"
 
-#define CHG_DIRECTION_PIN 21   // adjust pin as wired
+#define CHG_DIRECTION_PIN 21   // adjust as wired
 
 static volatile bool pressed_flag = false;
 
-static void chg_direction_irq(uint gpio, uint32_t events)
+void chg_direction_irq_handler(uint gpio, uint32_t events)
 {
     if (gpio == CHG_DIRECTION_PIN)
-        pressed_flag = true;  // flag set; cleared when read
+        pressed_flag = true;
 }
 
 void chg_direction_init(void)
@@ -21,8 +21,8 @@ void chg_direction_init(void)
     gpio_set_dir(CHG_DIRECTION_PIN, GPIO_IN);
     gpio_pull_up(CHG_DIRECTION_PIN);
 
-    gpio_set_irq_enabled_with_callback(
-        CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true, &chg_direction_irq);
+    // only enable, do NOT register global callback here
+    gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
 }
 
 bool chg_direction_was_pressed(void)
@@ -31,3 +31,4 @@ bool chg_direction_was_pressed(void)
     pressed_flag = false;
     return was;
 }
+
