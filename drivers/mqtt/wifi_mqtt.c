@@ -8,7 +8,8 @@
 
 static bool wifi_ok = false;
 static bool mqtt_ok = false;
-static struct mqtt_client client;
+static mqtt_client_t *client;
+
 
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status)
 {
@@ -49,11 +50,19 @@ bool wifi_is_connected(void)
     return wifi_ok;
 }
 
-void mqtt_init(void)
-{
+void mqtt_init(void) {
+    // Create a new MQTT client instance
+    client = mqtt_client_new();
+    if (client == NULL) {
+        printf("Failed to create MQTT client.\n");
+        return;
+    }
+
+    // Connect to the broker (example)
     ip_addr_t broker_ip;
     ip4addr_aton(MQTT_SERVER_IP, &broker_ip);
-    mqtt_client_connect(&client, &broker_ip, MQTT_PORT, mqtt_connection_cb, NULL, NULL);
+
+    mqtt_client_connect(client, &broker_ip, MQTT_PORT, mqtt_connection_cb, NULL, NULL);
 }
 
 bool mqtt_is_connected(void)
@@ -61,14 +70,13 @@ bool mqtt_is_connected(void)
     return mqtt_ok;
 }
 
-void mqtt_publish(const char *topic, const char *msg)
-{
-    if (!mqtt_ok) return;
-
-    err_t err = mqtt_publish(&client, topic, msg, strlen(msg), 0, 0, NULL, NULL);
-    if (err != ERR_OK)
-        printf("MQTT publish error: %d\n", err);
+void wifi_mqtt_publish(const char *topic, const char *msg) {
+    err_t err = mqtt_publish(client, topic, msg, strlen(msg), 0, 0, NULL, NULL);
+    if (err != ERR_OK) {
+        printf("MQTT publish failed: %d\n", err);
+    }
 }
+
 
 void mqtt_loop(void)
 {

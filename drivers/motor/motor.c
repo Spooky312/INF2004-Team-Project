@@ -4,8 +4,12 @@
 // ===============================================
 #include "motor.h"
 
-#define MOTOR_L_PWM 14
-#define MOTOR_R_PWM 15
+// Motor A (right): GP8 (PWM), GP9 (DIR)
+// Motor B (left): GP10 (PWM), GP11 (DIR)
+#define MOTOR_R_PWM 10
+#define MOTOR_R_DIR 11
+#define MOTOR_L_PWM 8
+#define MOTOR_L_DIR 9
 
 static uint slice_l, chan_l, slice_r, chan_r;
 
@@ -18,8 +22,18 @@ static uint16_t speed_to_pwm(float speed)
 
 void motor_init(void)
 {
+    // Initialize PWM pins
     gpio_set_function(MOTOR_L_PWM, GPIO_FUNC_PWM);
     gpio_set_function(MOTOR_R_PWM, GPIO_FUNC_PWM);
+
+    // Initialize direction pins
+    gpio_init(MOTOR_L_DIR);
+    gpio_set_dir(MOTOR_L_DIR, GPIO_OUT);
+    gpio_put(MOTOR_L_DIR, 0);  // Start with forward direction
+    
+    gpio_init(MOTOR_R_DIR);
+    gpio_set_dir(MOTOR_R_DIR, GPIO_OUT);
+    gpio_put(MOTOR_R_DIR, 0);  // Start with forward direction
 
     slice_l = pwm_gpio_to_slice_num(MOTOR_L_PWM);
     chan_l  = pwm_gpio_to_channel(MOTOR_L_PWM);
@@ -34,6 +48,22 @@ void motor_init(void)
 
 void motor_set_speed(float left_speed, float right_speed)
 {
+    // Handle left motor direction and speed
+    if (left_speed < 0) {
+        gpio_put(MOTOR_L_DIR, 1);  // Reverse
+        left_speed = -left_speed;
+    } else {
+        gpio_put(MOTOR_L_DIR, 0);  // Forward
+    }
+    
+    // Handle right motor direction and speed
+    if (right_speed < 0) {
+        gpio_put(MOTOR_R_DIR, 1);  // Reverse
+        right_speed = -right_speed;
+    } else {
+        gpio_put(MOTOR_R_DIR, 0);  // Forward
+    }
+    
     pwm_set_chan_level(slice_l, chan_l, speed_to_pwm(left_speed));
     pwm_set_chan_level(slice_r, chan_r, speed_to_pwm(right_speed));
 }

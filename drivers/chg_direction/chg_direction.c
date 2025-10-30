@@ -5,7 +5,7 @@
 // ===============================================
 #include "chg_direction.h"
 
-#define CHG_DIRECTION_PIN 10   // adjust pin as wired
+#define CHG_DIRECTION_PIN 21   // adjust pin as wired
 
 static volatile bool pressed_flag = false;
 

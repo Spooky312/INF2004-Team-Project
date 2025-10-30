@@ -14,7 +14,9 @@
 /* =========================================================================
  *  System integration
  * ========================================================================= */
-#define NO_SYS                          0     /* ✅ We are using an RTOS */
+#define NO_SYS                          0    /*  0 for FreeRTOS integration  1 for bare-metal */
+#define LWIP_PROVIDE_ERRNO              1    /* ✅ Let lwIP provide errno */   
+#define LWIP_COMPAT_MUTEX_ALLOWED       1   /* ✅ Allow mutexes */
 #define SYS_LIGHTWEIGHT_PROT            1
 #define LWIP_COMPAT_MUTEX               1
 #define LWIP_TIMERS                     1

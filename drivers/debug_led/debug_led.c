@@ -5,10 +5,10 @@
 #include "debug_led.h"
 #include "hardware/timer.h"
 
-#define STATUS_LED_PIN   25
-#define IMU_LED_PIN      11
-#define ENCODER_LED_PIN  12
-#define WIFI_LED_PIN     13
+#define STATUS_LED_PIN   25  // Onboard LED
+#define IMU_LED_PIN      19  // GP19 (available)
+#define ENCODER_LED_PIN  24  // GP24 (available)
+#define WIFI_LED_PIN     23  // GP23 (available)
 
 void debug_led_init(void)
 {
