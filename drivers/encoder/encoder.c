@@ -54,7 +54,8 @@ void encoder_init(void)
     gpio_set_dir(ENCODER_RIGHT_PIN, GPIO_IN);
     gpio_pull_up(ENCODER_RIGHT_PIN);  // <-- FIXED
 
-    gpio_set_irq_enabled(ENCODER_LEFT_PIN, GPIO_IRQ_EDGE_FALL, true);
+    // Set up IRQ callback BEFORE enabling interrupts
+    gpio_set_irq_enabled_with_callback(ENCODER_LEFT_PIN, GPIO_IRQ_EDGE_FALL, true, &encoder_irq_handler);
     gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
 
     last_left_time = last_right_time = get_absolute_time();

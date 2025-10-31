@@ -38,26 +38,6 @@
 static float target_speed   = 80.0f;  // Reduced from 150 - adjust as needed (0-255)
 static float target_heading = 0.0f;
 
-// -----------------------------------------------
-// Helper: Convert heading to compass direction
-// -----------------------------------------------
-static const char* heading_to_compass(float heading)
-{
-    // Normalize heading to 0-360
-    while (heading < 0) heading += 360.0f;
-    while (heading >= 360.0f) heading -= 360.0f;
-    
-    if (heading >= 337.5f || heading < 22.5f) return "N";
-    if (heading >= 22.5f && heading < 67.5f) return "NE";
-    if (heading >= 67.5f && heading < 112.5f) return "E";
-    if (heading >= 112.5f && heading < 157.5f) return "SE";
-    if (heading >= 157.5f && heading < 202.5f) return "S";
-    if (heading >= 202.5f && heading < 247.5f) return "SW";
-    if (heading >= 247.5f && heading < 292.5f) return "W";
-    if (heading >= 292.5f && heading < 337.5f) return "NW";
-    return "?";
-}
-
 
 static void gpio_irq_router(uint gpio, uint32_t events) {
     encoder_irq_handler(gpio, events);
@@ -207,10 +187,8 @@ static void pid_task(void *p)
         float speed_corr   = pid_compute_speed(target_speed, avg_rpm);
         float heading_corr = pid_compute_heading(heading_error);
 
-        // Heading correction: positive correction = turn left (slow right motor)
-        // negative correction = turn right (slow left motor)
-        float left_output  = direction * (target_speed + speed_corr + heading_corr);
-        float right_output = direction * (target_speed + speed_corr - heading_corr);
+        float left_output  = direction * (target_speed + speed_corr - heading_corr);
+        float right_output = direction * (target_speed + speed_corr + heading_corr);
 
         // Debug output every 50 loops (1 second)
         if (++loop_count >= 50) {
@@ -218,9 +196,8 @@ static void pid_task(void *p)
             // <-- FIX: Added heading_raw and heading_filt to the debug print
             printf("[PID] %s: L=%.1f R=%.1f (tgt=%.1f rpm=%.1f)\n",
                    state_names[state], left_output, right_output, target_speed, avg_rpm);
-            printf("[PID] Head: Target=%.2f°(%s) Current=%.2f° Err=%.2f° Corr=%.2f\n",
-                   target_heading, heading_to_compass(target_heading), 
-                   heading_filt, heading_error, heading_corr);
+            printf("[PID] Head: Raw=%.2f Filt=%.2f Err=%.2f Corr=%.2f\n",
+                   heading_raw, heading_filt, heading_error, heading_corr);
                    
             loop_count = 0;
         }
@@ -257,9 +234,9 @@ static void telemetry_task(void *p)
         char msg[256];
         snprintf(msg, sizeof(msg),
                  "{\"rpm_l\":%.2f,\"rpm_r\":%.2f,\"dist\":%.3f,"
-                 "\"target_heading\":%.2f,\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
+                 "\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
                  "\"ticks_l\":%lu,\"ticks_r\":%lu}",
-                 rpm_l, rpm_r, dist, target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
+                 rpm_l, rpm_r, dist, heading_raw, heading_filt, ticks_l, ticks_r);
 
         printf("Telemetry: %s\n", msg);
         
@@ -333,25 +310,12 @@ int main(void)
     chg_direction_init();
     printf("Change-direction driver active.\n");
 #else
-    printf("Change-direction driver not found running forward only.\n");
+    printf("Change-direction driver not found â€” running forward only.\n");
 #endif
 
-    // Allow IMU magnetometer to stabilize and pre-fill the EMA filter
-    printf("\n[IMU] Stabilizing magnetometer...\n");
-    sleep_ms(100);  // Give sensor time to settle
-    
     float heading_raw, heading_filt;
-    // Take multiple readings to prime the EMA filter
-    for (int i = 0; i < 10; i++) {
-        imu_get_heading_deg(&heading_raw, &heading_filt);
-        sleep_ms(50);
-    }
-    
+    imu_get_heading_deg(&heading_raw, &heading_filt);
     target_heading = heading_filt;
-    
-    printf("[HEADING] Target heading set to: %.2f° (%s)\n", 
-           target_heading, heading_to_compass(target_heading));
-    printf("[HEADING] Robot will try to maintain this direction\n");
 
     printf("\n[INFO] Creating FreeRTOS tasks...\n");
     printf("      WiFi task DISABLED for testing\n");
