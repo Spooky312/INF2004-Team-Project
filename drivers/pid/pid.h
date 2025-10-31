@@ -14,4 +14,7 @@ void pid_init(void);
 float pid_compute_speed(float target_speed, float measured_speed);
 float pid_compute_heading(float heading_error);
 
+// ---- Get PID gains (for debugging/tuning) ----
+void pid_get_heading_gains(float *kp, float *ki, float *kd);
+
 #endif

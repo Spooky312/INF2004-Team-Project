@@ -10,11 +10,11 @@ static float kp_speed   = 0.45f;
 static float ki_speed   = 0.05f;
 static float kd_speed   = 0.02f;
 
-// <-- FIX: Reduced heading gains to stop oscillation.
-// Start with these, then slowly increase Kp and Kd.
-static float kp_heading = 0.30f;  // Was 1.20f (very high)
-static float ki_heading = 0.00f;
-static float kd_heading = 0.10f;  // Was 0.05f
+// <-- FIX: Further reduced heading gains to prevent zigzagging.
+// Very conservative values - increase gradually if needed.
+static float kp_heading = 0.15f;  // Reduced from 0.30f
+static float ki_heading = 0.00f;  // Keep disabled
+static float kd_heading = 0.05f;  // Reduced from 0.10f
 
 // ---- Internal PID states ----
 static float speed_integral = 0.0f;
@@ -52,6 +52,11 @@ float pid_compute_speed(float target_speed, float measured_speed)
 // ---- Heading PID ----
 float pid_compute_heading(float heading_error)
 {
+    // Deadband: ignore small errors to prevent hunting
+    if (heading_error > -5.0f && heading_error < 5.0f) {
+        heading_error = 0.0f;
+    }
+    
     heading_integral += heading_error;
     float derivative = heading_error - prev_heading_err;
     prev_heading_err = heading_error;
@@ -64,9 +69,16 @@ float pid_compute_heading(float heading_error)
     if (heading_integral > 50.0f) heading_integral = 50.0f;
     if (heading_integral < -50.0f) heading_integral = -50.0f;
 
-    // Clamp output for motor correction range
-    if (output > 100.0f) output = 100.0f;
-    if (output < -100.0f) output = -100.0f;
+    // Clamp output for motor correction range (reduced from ±100 to ±30)
+    if (output > 30.0f) output = 30.0f;
+    if (output < -30.0f) output = -30.0f;
 
     return output;
+}
+// ---- Get PID gains for debugging/tuning ----
+void pid_get_heading_gains(float *kp, float *ki, float *kd)
+{
+    if (kp) *kp = kp_heading;
+    if (ki) *ki = ki_heading;
+    if (kd) *kd = kd_heading;
 }

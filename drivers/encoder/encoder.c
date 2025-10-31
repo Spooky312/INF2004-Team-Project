@@ -8,8 +8,6 @@
 #include <stdio.h>
 
 // ---- User configuration ----
-#define ENCODER_LEFT_PIN   27   // Grove Port 6
-#define ENCODER_RIGHT_PIN  6    // Grove Port 5
 #define TICKS_PER_REV      360.0f
 #define WHEEL_CIRCUM_M     0.21f
 #define RPM_TIMEOUT_US     500000  // 0.5 seconds - if no ticks, assume stopped

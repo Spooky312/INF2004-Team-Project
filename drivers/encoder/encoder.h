@@ -5,8 +5,8 @@
 #ifndef ENCODER_H
 #define ENCODER_H
 
-#define ENCODER_LEFT_PIN   27
-#define ENCODER_RIGHT_PIN  6
+#define ENCODER_LEFT_PIN   3
+#define ENCODER_RIGHT_PIN  26
 
 #include "pico/stdlib.h"
 
