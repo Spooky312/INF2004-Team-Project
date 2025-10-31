@@ -9,6 +9,12 @@
 #include "pico/cyw43_arch.h"
 #include "lwip/apps/mqtt.h"
 
+// MQTT Configuration
+#ifndef MQTT_PORT
+#define MQTT_PORT 1883  // Default MQTT port
+#endif
+
+// Function prototypes
 void wifi_connect_init(void);
 bool wifi_is_connected(void);
 
@@ -17,4 +23,4 @@ bool mqtt_is_connected(void);
 void wifi_mqtt_publish(const char *topic, const char *msg);
 void mqtt_loop(void);
 
-#endif
+#endif // WIFI_MQTT_H
