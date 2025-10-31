@@ -389,7 +389,7 @@ int main(void)
     printf("Right Turn: A,C,E,G,I,K,M,O,Q,S,U,W,Y\n");
     printf("Left Turn:  B,D,F,H,J,L,N,P,R,T,V,X,Z\n");
     printf("================================================\n");
-    printf("Press button (GP22) to START/STOP robot\n");
+    printf("Press button (GP21) to START/STOP robot\n");
     printf("================================================\n\n");
     
     // Initialize drivers
