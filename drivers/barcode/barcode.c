@@ -16,8 +16,8 @@
 #define VERIFY_MS          2       // Debounce time
 #define BAR_IS_LOW         0       // 0: black = HIGH, 1: black = LOW
 #define SCAN_RESET_MS      1000    // Reset if no segments for this long
-#define DEBUG_SEGMENTS     1       // Print each segment
-#define DEBUG_WINDOW       1       // Print window decode attempts
+#define DEBUG_SEGMENTS     0       // Print each segment (0=off for line testing)
+#define DEBUG_WINDOW       0       // Print window decode attempts (0=off for line testing)
 
 // -----------------------------------------------
 // Edge Tracker State
