@@ -207,8 +207,10 @@ static void pid_task(void *p)
         float speed_corr   = pid_compute_speed(target_speed, avg_rpm);
         float heading_corr = pid_compute_heading(heading_error);
 
-        float left_output  = direction * (target_speed + speed_corr - heading_corr);
-        float right_output = direction * (target_speed + speed_corr + heading_corr);
+        // Heading correction: positive correction = turn left (slow right motor)
+        // negative correction = turn right (slow left motor)
+        float left_output  = direction * (target_speed + speed_corr + heading_corr);
+        float right_output = direction * (target_speed + speed_corr - heading_corr);
 
         // Debug output every 50 loops (1 second)
         if (++loop_count >= 50) {
@@ -331,14 +333,23 @@ int main(void)
     chg_direction_init();
     printf("Change-direction driver active.\n");
 #else
-    printf("Change-direction driver not found â€” running forward only.\n");
+    printf("Change-direction driver not found running forward only.\n");
 #endif
 
+    // Allow IMU magnetometer to stabilize and pre-fill the EMA filter
+    printf("\n[IMU] Stabilizing magnetometer...\n");
+    sleep_ms(100);  // Give sensor time to settle
+    
     float heading_raw, heading_filt;
-    imu_get_heading_deg(&heading_raw, &heading_filt);
+    // Take multiple readings to prime the EMA filter
+    for (int i = 0; i < 10; i++) {
+        imu_get_heading_deg(&heading_raw, &heading_filt);
+        sleep_ms(50);
+    }
+    
     target_heading = heading_filt;
     
-    printf("\n[HEADING] Target heading set to: %.2f° (%s)\n", 
+    printf("[HEADING] Target heading set to: %.2f° (%s)\n", 
            target_heading, heading_to_compass(target_heading));
     printf("[HEADING] Robot will try to maintain this direction\n");
 

@@ -10,11 +10,11 @@ static float kp_speed   = 0.45f;
 static float ki_speed   = 0.05f;
 static float kd_speed   = 0.02f;
 
-// <-- FIX: Further reduced heading gains to prevent zigzagging.
-// Very conservative values - increase gradually if needed.
-static float kp_heading = 0.15f;  // Reduced from 0.30f
-static float ki_heading = 0.00f;  // Keep disabled
-static float kd_heading = 0.05f;  // Reduced from 0.10f
+// <-- TUNED: Balanced heading gains for smooth tracking
+// Stronger response than before, but still conservative to avoid oscillation
+static float kp_heading = 0.50f;  // Increased from 0.15f for better tracking
+static float ki_heading = 0.02f;  // Small integral to eliminate steady-state error
+static float kd_heading = 0.15f;  // Increased from 0.05f for damping
 
 // ---- Internal PID states ----
 static float speed_integral = 0.0f;
@@ -52,8 +52,8 @@ float pid_compute_speed(float target_speed, float measured_speed)
 // ---- Heading PID ----
 float pid_compute_heading(float heading_error)
 {
-    // Deadband: ignore small errors to prevent hunting
-    if (heading_error > -5.0f && heading_error < 5.0f) {
+    // Smaller deadband: ignore only very tiny errors to prevent micro-adjustments
+    if (heading_error > -2.0f && heading_error < 2.0f) {
         heading_error = 0.0f;
     }
     
@@ -66,12 +66,12 @@ float pid_compute_heading(float heading_error)
                    (kd_heading * derivative);
 
     // Anti-windup limit for integral term
-    if (heading_integral > 50.0f) heading_integral = 50.0f;
-    if (heading_integral < -50.0f) heading_integral = -50.0f;
+    if (heading_integral > 100.0f) heading_integral = 100.0f;
+    if (heading_integral < -100.0f) heading_integral = -100.0f;
 
-    // Clamp output for motor correction range (reduced from ±100 to ±30)
-    if (output > 30.0f) output = 30.0f;
-    if (output < -30.0f) output = -30.0f;
+    // Clamp output for motor correction range (increased from ±30 to ±50)
+    if (output > 50.0f) output = 50.0f;
+    if (output < -50.0f) output = -50.0f;
 
     return output;
 }
