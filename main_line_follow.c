@@ -174,79 +174,42 @@ static void line_follow_task(void *p)
                 
             case STATE_LINE_FOLLOW:
             {
-                static float heading_on_black = 0.0f;  // IMU heading when we entered black
-                static bool was_on_line = false;       // Track previous state
-                
                 // Read line sensor
                 bool on_line = line_sensor_on_line();
                 uint16_t raw = line_sensor_read_raw();
                 
-                // Get current IMU heading
-                float current_heading = imu_get_heading();
-                
-                if (on_line) {
-                    // ON BLACK - go straight
-                    motor_set_speed(BASE_SPEED, BASE_SPEED);
-                    
-                    // If we just entered black, store the heading
-                    if (!was_on_line) {
-                        heading_on_black = current_heading;
-                        if (++loop_count >= 25) {
-                            printf("[LINE] Entered black at heading %.1f\n", heading_on_black);
-                            loop_count = 0;
-                        }
+                if (!on_line) {
+                    // Lost line - stop and report
+                    motor_set_speed(0, 0);
+                    if (++loop_count >= 25) {  // Every 500ms
+                        printf("[LINE] LINE LOST! Raw=%u\n", raw);
+                        loop_count = 0;
                     }
-                    
-                    was_on_line = true;
-                    debug_led_set(24, true);
-                } else {
-                    // OFF BLACK (on white) - determine turn direction from IMU
-                    
-                    if (was_on_line) {
-                        // Just exited black - calculate heading change
-                        float heading_change = current_heading - heading_on_black;
-                        
-                        // Normalize to -180 to +180
-                        while (heading_change > 180.0f) heading_change -= 360.0f;
-                        while (heading_change < -180.0f) heading_change += 360.0f;
-                        
-                        printf("[LINE] Exited black. Heading change: %.1f degrees\n", heading_change);
-                    }
-                    
-                    // Calculate heading change to decide turn direction
-                    float heading_change = current_heading - heading_on_black;
-                    while (heading_change > 180.0f) heading_change -= 360.0f;
-                    while (heading_change < -180.0f) heading_change += 360.0f;
-                    
-                    float base = BASE_SPEED * 0.5f;  // 50% base (~40)
-                    
-                    if (heading_change > 2.0f) {
-                        // Robot turned RIGHT (heading increased) → turn LEFT to correct
-                        motor_set_speed(base * 0.2f, base);  // L=8, R=40
-                        if (++loop_count >= 25) {
-                            printf("[LINE] Correcting LEFT (heading drift: +%.1f)\n", heading_change);
-                            loop_count = 0;
-                        }
-                    } else if (heading_change < -2.0f) {
-                        // Robot turned LEFT (heading decreased) → turn RIGHT to correct
-                        motor_set_speed(base, base * 0.2f);  // L=40, R=8
-                        if (++loop_count >= 25) {
-                            printf("[LINE] Correcting RIGHT (heading drift: %.1f)\n", heading_change);
-                            loop_count = 0;
-                        }
-                    } else {
-                        // Heading change is small, default to turning right
-                        motor_set_speed(base, base * 0.2f);  // L=40, R=8
-                        if (++loop_count >= 25) {
-                            printf("[LINE] Small drift (%.1f°), turning right\n", heading_change);
-                            loop_count = 0;
-                        }
-                    }
-                    
-                    was_on_line = false;
-                    debug_led_set(24, false);
+                    debug_led_set(24, false);  // Encoder LED off = line lost
+                    break;
                 }
                 
+                debug_led_set(24, true);  // Encoder LED on = line detected
+                
+                // Simple line following: single sensor means binary control
+                // For better performance, use multiple sensors in an array
+                // For now: assume centered when on line
+                float line_error = 0.0f;  // Centered
+                
+                float correction = line_pid_compute(line_error);
+                
+                // Apply correction to motors (similar to heading PID)
+                float left_speed = BASE_SPEED + correction;
+                float right_speed = BASE_SPEED - correction;
+                
+                motor_set_speed(left_speed, right_speed);
+                
+                // Debug output - MORE VERBOSE
+                if (++loop_count >= 25) {  // Every 500ms
+                    printf("[LINE] Following | Raw=%u | L=%.1f R=%.1f | MOVING!\n", 
+                           raw, left_speed, right_speed);
+                    loop_count = 0;
+                }
                 break;
             }
             
