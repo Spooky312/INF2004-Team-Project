@@ -15,8 +15,12 @@
 #include "encoder.h"
 #include "imu.h"
 #include "pid.h"
-#include "wifi_mqtt.h"
 #include "debug_led.h"
+
+// Updated include: use new thread-safe network manager
+#include "networkManager.h"
+#include "mqtt.h"
+
 
 #if HAVE_CHG_DIRECTION
 #include "chg_direction.h"
@@ -25,7 +29,7 @@
 // -----------------------------------------------
 // Task Configuration
 // -----------------------------------------------
-#define WIFI_TASK_PRIORITY       (tskIDLE_PRIORITY + 3)
+#define NET_TASK_PRIORITY        (tskIDLE_PRIORITY + 3)
 #define PID_TASK_PRIORITY        (tskIDLE_PRIORITY + 2)
 #define TELEMETRY_TASK_PRIORITY  (tskIDLE_PRIORITY + 1)
 
@@ -61,6 +65,7 @@ static const char* heading_to_compass(float heading)
 
 static void gpio_irq_router(uint gpio, uint32_t events) {
     encoder_irq_handler(gpio, events);
+
     chg_direction_irq_handler(gpio, events);
 }
 
@@ -71,6 +76,7 @@ void gpio_router_init(void) {
 
     // Enable all relevant pins (already done in their inits)
     gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
+
     gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
 }
 
@@ -116,7 +122,6 @@ static void pid_task(void *p)
                 // Use old state direction for slowing down
                 int old_state = (state == 0) ? 2 : (state - 1);
                 int direction = (old_state == 1) ? 1 : (old_state == 2) ? -1 : 0;
-                
                 motor_set_speed(direction * ramp_speed, direction * ramp_speed);
                 transition_counter++;
             }
@@ -188,7 +193,6 @@ static void pid_task(void *p)
         else
             debug_led_set(24, false);
 
-        // ---- IMU data ----
         float heading_raw, heading_filt;
         if (imu_get_heading_deg(&heading_raw, &heading_filt))
             debug_led_set(19, true);  // IMU LED (fixed pin)
@@ -198,7 +202,6 @@ static void pid_task(void *p)
         // ---- PID control ----
         // Determine direction from state: 1=forward, 2=backward
         int direction = (state == 1) ? 1 : -1;
-        
         float avg_rpm = (rpm_l + rpm_r) / 2.0f;
         float heading_error = target_heading - heading_filt;
         if (heading_error > 180.0f) heading_error -= 360.0f;
@@ -221,7 +224,6 @@ static void pid_task(void *p)
             printf("[PID] Head: Target=%.2f°(%s) Current=%.2f° Err=%.2f° Corr=%.2f\n",
                    target_heading, heading_to_compass(target_heading), 
                    heading_filt, heading_error, heading_corr);
-                   
             loop_count = 0;
         }
 
@@ -236,7 +238,6 @@ static void pid_task(void *p)
 static void telemetry_task(void *p)
 {
     TickType_t last = xTaskGetTickCount();
-    
     printf("[TELEM] Task loop starting\n");
 
     for (;;)
@@ -270,45 +271,15 @@ static void telemetry_task(void *p)
             printf("       Right encoder: GP6 (Grove Port 6)\n");
         }
         
-        // Only publish if WiFi/MQTT available
-        // wifi_mqtt_publish("pico/telemetry", msg);  // Disabled for testing
+        // Publish via MQTT if connected
+        if (mqtt_app_is_connected()) {
+            mqtt_app_publish("pico/telemetry", msg, 0, 0);
+        }
+
 
         // Blink status LED (heartbeat)
         debug_led_blink(25, 20);
-
         vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
-    }
-}
-
-// -----------------------------------------------
-// Wi-Fi and MQTT Task
-// -----------------------------------------------
-static void wifi_task(void *p)
-{
-    wifi_connect_init();
-
-    while (!wifi_is_connected())
-    {
-        printf("Connecting to Wi-Fi...\n");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-
-    printf("Wi-Fi connected.\n");
-    debug_led_set(13, true); // Wi-Fi LED solid ON
-
-    mqtt_init();
-    while (!mqtt_is_connected())
-    {
-        printf("Connecting to MQTT broker...\n");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-
-    printf("MQTT connected.\n");
-
-    for (;;)
-    {
-        mqtt_loop();
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -322,51 +293,48 @@ int main(void)
     printf("=== Demo 1: PID + IMU + MQTT + LEDs ===\n");
 
     debug_led_init();
-    motor_init();
-    encoder_init();
-    imu_init();
-    pid_init();
+    // motor_init();
+    // encoder_init();
+    // imu_init();
+    // pid_init();
 
-    gpio_router_init(); 
+    // gpio_router_init(); 
 
-#if HAVE_CHG_DIRECTION
-    chg_direction_init();
-    printf("Change-direction driver active.\n");
-#else
-    printf("Change-direction driver not found running forward only.\n");
-#endif
+// #if HAVE_CHG_DIRECTION
+//     chg_direction_init();
+//     printf("Change-direction driver active.\n");
+// #else
+//     printf("Change-direction driver not found running forward only.\n");
+// #endif
 
-    // Allow IMU magnetometer to stabilize and pre-fill the EMA filter
-    printf("\n[IMU] Stabilizing magnetometer...\n");
-    sleep_ms(100);  // Give sensor time to settle
+//     printf("\n[IMU] Stabilizing magnetometer...\n");
+//     sleep_ms(100);  // Give sensor time to settle
     
-    float heading_raw, heading_filt;
-    // Take multiple readings to prime the EMA filter
-    for (int i = 0; i < 10; i++) {
-        imu_get_heading_deg(&heading_raw, &heading_filt);
-        sleep_ms(50);
-    }
+//     float heading_raw, heading_filt;
+//     for (int i = 0; i < 10; i++) {
+//         imu_get_heading_deg(&heading_raw, &heading_filt);
+//         sleep_ms(50);
+//     }
     
-    target_heading = heading_filt;
-    
-    printf("[HEADING] Target heading set to: %.2f° (%s)\n", 
-           target_heading, heading_to_compass(target_heading));
-    printf("[HEADING] Robot will try to maintain this direction\n");
+//     target_heading = heading_filt;
+//     printf("[HEADING] Target heading set to: %.2f° (%s)\n", 
+//            target_heading, heading_to_compass(target_heading));
 
     printf("\n[INFO] Creating FreeRTOS tasks...\n");
-    printf("      WiFi task DISABLED for testing\n");
-    // xTaskCreate(wifi_task, "WiFi", 2048, NULL, WIFI_TASK_PRIORITY, NULL);
-    printf("      Creating PID task...\n");
-    xTaskCreate(pid_task, "PID", 2048, NULL, PID_TASK_PRIORITY, NULL);
-    printf("      Creating Telemetry task...\n");
-    xTaskCreate(telemetry_task, "Telemetry", 2048, NULL, TELEMETRY_TASK_PRIORITY, NULL);
+    printf("      Creating Network Manager task...\n");
+    xTaskCreate(network_manager_task, "NetMgr", 2048, NULL, NET_TASK_PRIORITY, NULL);
 
-    printf("\n[INFO] Starting FreeRTOS scheduler...\n");
-    printf("========================================\n\n");
+    // printf("      Creating PID task...\n");
+    // xTaskCreate(pid_task, "PID", 2048, NULL, PID_TASK_PRIORITY, NULL);
+
+    // printf("      Creating Telemetry task...\n");
+    // xTaskCreate(telemetry_task, "Telemetry", 2048, NULL, TELEMETRY_TASK_PRIORITY, NULL);
+
+    // printf("\n[INFO] Starting FreeRTOS scheduler...\n");
+    // printf("========================================\n\n");
     
     vTaskStartScheduler();
     
-    // Should never reach here
     printf("ERROR: Scheduler failed to start!\n");
     while (1) {
         sleep_ms(1000);
