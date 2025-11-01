@@ -14,7 +14,7 @@ set(MQTT_SERVER_IP "192.168.43.1")  # Android hotspot default
 
 
 # FreeRTOS kernel path - adjust this path as necessary
-set(FREERTOS_KERNEL_PATH "$ENV{HOME}/FreeRTOS-Kernel")
+set(FREERTOS_KERNEL_PATH "C:/Users/iikod/FreeRTOS-Kernel")
 
 
 # --- Wi-Fi + MQTT (FreeRTOS variant) ---
