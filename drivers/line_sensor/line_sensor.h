@@ -10,8 +10,8 @@
 
 // Configuration
 #define LINE_ADC_PIN        27
-#define LINE_ADC_INPUT      0
-#define LINE_THRESHOLD      280   // Adjust based on calibration
+#define LINE_ADC_INPUT      1     // GPIO 27 = ADC1 (not ADC0!)
+#define LINE_THRESHOLD      2000  // Midpoint: white ~0-100, black ~4000-4095
 #define LINE_SAMPLE_COUNT   8     // Averaging samples
 
 // Line state

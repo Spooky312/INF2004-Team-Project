@@ -16,7 +16,8 @@ void line_sensor_init(void) {
 
 line_state_t line_sensor_read(void) {
     uint16_t value = adc_read();
-    return (value < threshold) ? LINE_WHITE : LINE_BLACK;
+    // High ADC = black line, Low ADC = white surface
+    return (value > threshold) ? LINE_BLACK : LINE_WHITE;
 }
 
 uint16_t line_sensor_read_raw(void) {
