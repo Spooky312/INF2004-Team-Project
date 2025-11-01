@@ -16,9 +16,10 @@ static uint slice_l, chan_l, slice_r, chan_r;
 
 static uint16_t speed_to_pwm(float speed)
 {
-    if (speed < 0) speed = 0;
-    if (speed > 255) speed = 255;
-    return (uint16_t)((speed / 255.0f) * 65535);
+    // Accept speed in range 0.0 to 1.0
+    if (speed < 0.0f) speed = 0.0f;
+    if (speed > 1.0f) speed = 1.0f;
+    return (uint16_t)(speed * 65535.0f);
 }
 
 void motor_init(void)

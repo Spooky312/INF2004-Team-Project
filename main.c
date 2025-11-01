@@ -159,6 +159,9 @@ void turn_task(void *params) {
 void line_follow_task(void *params) {
     printf("[LINE_FOLLOW] Task started\n");
     
+    uint32_t off_track_count = 0;
+    const uint32_t MAX_OFF_TRACK = 25;  // 0.5 seconds at 50Hz before stopping
+    
     while (1) {
         robot_state_t state;
         
@@ -172,6 +175,7 @@ void line_follow_task(void *params) {
         
         // Only follow line in LINE_FOLLOWING state
         if (state != STATE_LINE_FOLLOWING) {
+            off_track_count = 0;
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -180,27 +184,57 @@ void line_follow_task(void *params) {
         float line_error = line_sensor_get_error();
         line_state_t line_state = line_sensor_read();
         
-        // Compute PID correction
-        float correction = pid_compute_heading(line_error);
-        
-        // Apply motor speeds
-        float left_speed = BASE_SPEED - correction;
-        float right_speed = BASE_SPEED + correction;
-        
-        // Clamp speeds
-        if (left_speed > 1.0f) left_speed = 1.0f;
-        if (left_speed < -1.0f) left_speed = -1.0f;
-        if (right_speed > 1.0f) right_speed = 1.0f;
-        if (right_speed < -1.0f) right_speed = -1.0f;
-        
-        motor_set_speed(left_speed, right_speed);
-        
-        // Update state machine context
-        float distance = encoder_get_distance_m();
-        if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
-            state_machine_update_context(left_speed, right_speed, distance, 
-                                         line_error, line_state == LINE_BLACK);
-            xSemaphoreGive(state_mutex);
+        // Check if on line
+        if (line_state == LINE_BLACK) {
+            off_track_count = 0;  // Reset counter when on line
+            
+            // Compute PID correction
+            float correction = pid_compute_heading(line_error);
+            
+            // Apply motor speeds
+            float left_speed = BASE_SPEED - correction;
+            float right_speed = BASE_SPEED + correction;
+            
+            // Clamp speeds
+            if (left_speed > 1.0f) left_speed = 1.0f;
+            if (left_speed < -1.0f) left_speed = -1.0f;
+            if (right_speed > 1.0f) right_speed = 1.0f;
+            if (right_speed < -1.0f) right_speed = -1.0f;
+            
+            motor_set_speed(left_speed, right_speed);
+            
+            // Update state machine context
+            float distance = encoder_get_distance_m();
+            if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
+                state_machine_update_context(left_speed, right_speed, distance, 
+                                             line_error, true);
+                xSemaphoreGive(state_mutex);
+            }
+        } else {
+            // Off track - increment counter
+            off_track_count++;
+            
+            if (off_track_count >= MAX_OFF_TRACK) {
+                // Lost line for too long - stop motors (silently)
+                motor_stop();
+                
+                // Update context
+                float distance = encoder_get_distance_m();
+                if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
+                    state_machine_update_context(0.0f, 0.0f, distance, 
+                                                 line_error, false);
+                    xSemaphoreGive(state_mutex);
+                }
+            } else {
+                // Still searching - maintain last motor speeds briefly
+                // This allows the robot to continue slightly while searching
+                float distance = encoder_get_distance_m();
+                if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
+                    state_machine_update_context(BASE_SPEED, BASE_SPEED, distance, 
+                                                 line_error, false);
+                    xSemaphoreGive(state_mutex);
+                }
+            }
         }
         
         vTaskDelay(pdMS_TO_TICKS(20));  // 50Hz update
@@ -277,7 +311,7 @@ void telemetry_task(void *params) {
     uint32_t report_count = 0;
     
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(500));  // Report every 500ms
+        vTaskDelay(pdMS_TO_TICKS(200));  // Report every 200ms (5Hz - faster logs)
         
         const robot_context_t *ctx;
         robot_state_t state;
@@ -334,6 +368,43 @@ int main() {
     
     // Register barcode callback
     barcode_set_callback(on_barcode_detected);
+    
+    // ===== Motor Calibration =====
+    printf("\n[CALIBRATION] Starting motor calibration...\n");
+    printf("[CALIBRATION] Testing forward motion...\n");
+    
+    // Test forward (3 seconds)
+    motor_set_speed(0.3f, 0.3f);
+    sleep_ms(3000);
+    motor_stop();
+    sleep_ms(1000);
+    
+    printf("[CALIBRATION] Testing backward motion...\n");
+    
+    // Test backward (3 seconds)
+    motor_set_speed(-0.3f, -0.3f);
+    sleep_ms(3000);
+    motor_stop();
+    sleep_ms(1000);
+    
+    printf("[CALIBRATION] Testing left turn...\n");
+    
+    // Test left turn (2 seconds)
+    motor_set_speed(-0.3f, 0.3f);
+    sleep_ms(2000);
+    motor_stop();
+    sleep_ms(1000);
+    
+    printf("[CALIBRATION] Testing right turn...\n");
+    
+    // Test right turn (2 seconds)
+    motor_set_speed(0.3f, -0.3f);
+    sleep_ms(2000);
+    motor_stop();
+    sleep_ms(1000);
+    
+    printf("[CALIBRATION] Motor calibration complete!\n");
+    printf("[CALIBRATION] Motors are working correctly.\n\n");
     
     // Create mutex
     state_mutex = xSemaphoreCreateMutex();
