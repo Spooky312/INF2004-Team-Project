@@ -180,6 +180,16 @@ void line_follow_task(void *params) {
     uint32_t off_track_count = 0;
     const uint32_t MAX_OFF_TRACK = 50;  // 0.5 seconds at 100Hz before stopping
     
+    // Single-sensor line following variables
+    typedef enum {
+        SEARCH_NONE,
+        SEARCH_LEFT,
+        SEARCH_RIGHT
+    } search_direction_t;
+    
+    search_direction_t last_turn = SEARCH_NONE;
+    float search_intensity = 0.0f;  // How hard to turn while searching
+    
     while (1) {
         // Check emergency stop
         if (emergency_stop_triggered) {
@@ -201,62 +211,60 @@ void line_follow_task(void *params) {
         // Only follow line in LINE_FOLLOWING state
         if (state != STATE_LINE_FOLLOWING) {
             off_track_count = 0;
+            last_turn = SEARCH_NONE;
+            search_intensity = 0.0f;
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
         
         // Read line sensor
-        float line_error = line_sensor_get_error();
         line_state_t line_state = line_sensor_read();
         
         // Check if on line
         if (line_state == LINE_BLACK) {
-            off_track_count = 0;  // Reset counter when on line
+            // ON LINE - go straight, reset search
+            off_track_count = 0;
+            search_intensity = 0.0f;
             
-            // Compute PID correction
-            float correction = pid_compute_heading(line_error);
-            
-            // Apply motor speeds
-            float left_speed = BASE_SPEED - correction;
-            float right_speed = BASE_SPEED + correction;
-            
-            // Clamp speeds
-            if (left_speed > 1.0f) left_speed = 1.0f;
-            if (left_speed < -1.0f) left_speed = -1.0f;
-            if (right_speed > 1.0f) right_speed = 1.0f;
-            if (right_speed < -1.0f) right_speed = -1.0f;
-            
-            motor_set_speed(left_speed, right_speed);
+            motor_set_speed(BASE_SPEED, BASE_SPEED);
             
             // Update state machine context
             float distance = encoder_get_distance_m();
             if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
-                state_machine_update_context(left_speed, right_speed, distance, 
-                                             line_error, true);
+                state_machine_update_context(BASE_SPEED, BASE_SPEED, distance, 
+                                             0.0f, true);
                 xSemaphoreGive(state_mutex);
             }
         } else {
-            // Off track - increment counter
+            // OFF LINE - search for it
             off_track_count++;
             
             if (off_track_count >= MAX_OFF_TRACK) {
-                // Lost line for too long - stop motors (silently)
+                // Lost line for too long - stop motors
                 motor_stop();
                 
-                // Update context
                 float distance = encoder_get_distance_m();
                 if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
                     state_machine_update_context(0.0f, 0.0f, distance, 
-                                                 line_error, false);
+                                                 0.0f, false);
                     xSemaphoreGive(state_mutex);
                 }
             } else {
-                // Still searching - maintain last motor speeds briefly
-                // This allows the robot to continue slightly while searching
+                // SEARCH PATTERN: Always turn RIGHT (robot veers left, so search right)
+                // Increase turn intensity the longer we're off track
+                search_intensity = 0.45f + (off_track_count * 0.008f);  // Start at 0.45
+                if (search_intensity > 0.60f) search_intensity = 0.60f;  // Cap at 0.60
+                
+                // Always search right (veer right) - left wheel slower, right wheel faster
+                float left_speed = BASE_SPEED - search_intensity;
+                float right_speed = BASE_SPEED;
+                
+                motor_set_speed(left_speed, right_speed);
+                
                 float distance = encoder_get_distance_m();
                 if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
-                    state_machine_update_context(BASE_SPEED, BASE_SPEED, distance, 
-                                                 line_error, false);
+                    state_machine_update_context(left_speed, right_speed, distance, 
+                                                 0.0f, false);
                     xSemaphoreGive(state_mutex);
                 }
             }
