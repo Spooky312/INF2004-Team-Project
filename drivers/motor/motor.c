@@ -4,13 +4,13 @@
 // ===============================================
 #include "motor.h"
 
-// <-- FIX: Corrected comments to match defines
-// Motor A (left): GP8 (PWM), GP9 (DIR)
-// Motor B (right): GP10 (PWM), GP11 (DIR)
-#define MOTOR_R_PWM 10
-#define MOTOR_R_DIR 11
-#define MOTOR_L_PWM 8
-#define MOTOR_L_DIR 9
+// <-- CORRECTED: Pin assignments to match actual wiring
+// Motor A (left): GP10 (PWM), GP11 (DIR)
+// Motor B (right): GP8 (PWM), GP9 (DIR)
+#define MOTOR_L_PWM 10
+#define MOTOR_L_DIR 11
+#define MOTOR_R_PWM 8
+#define MOTOR_R_DIR 9
 
 static uint slice_l, chan_l, slice_r, chan_r;
 

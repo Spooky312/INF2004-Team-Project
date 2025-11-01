@@ -255,9 +255,9 @@ void line_follow_task(void *params) {
                 search_intensity = 0.45f + (off_track_count * 0.008f);  // Start at 0.45
                 if (search_intensity > 0.60f) search_intensity = 0.60f;  // Cap at 0.60
                 
-                // Always search right (veer right) - left wheel slower, right wheel faster
-                float left_speed = BASE_SPEED - search_intensity;
-                float right_speed = BASE_SPEED;
+                // Always search right (veer right) - left wheel faster, right wheel slower
+                float left_speed = BASE_SPEED;
+                float right_speed = BASE_SPEED - search_intensity;
                 
                 motor_set_speed(left_speed, right_speed);
                 
