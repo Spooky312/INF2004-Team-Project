@@ -10,11 +10,11 @@ static float kp_speed   = 0.45f;
 static float ki_speed   = 0.05f;
 static float kd_speed   = 0.02f;
 
-// <-- TUNED: Balanced heading gains for smooth tracking
-// Stronger response than before, but still conservative to avoid oscillation
-static float kp_heading = 0.50f;  // Increased from 0.15f for better tracking
-static float ki_heading = 0.02f;  // Small integral to eliminate steady-state error
-static float kd_heading = 0.15f;  // Increased from 0.05f for damping
+// <-- TUNED: Aggressive heading gains for narrow 1.5cm line at low speed
+// Higher gains needed at low speeds to make quick corrections
+static float kp_heading = 0.8f;   // Increased for faster response to line position
+static float ki_heading = 0.05f;  // Slightly increased to eliminate drift
+static float kd_heading = 0.25f;  // Increased for better damping of oscillations
 
 // ---- Internal PID states ----
 static float speed_integral = 0.0f;
@@ -52,8 +52,8 @@ float pid_compute_speed(float target_speed, float measured_speed)
 // ---- Heading PID ----
 float pid_compute_heading(float heading_error)
 {
-    // Smaller deadband: ignore only very tiny errors to prevent micro-adjustments
-    if (heading_error > -2.0f && heading_error < 2.0f) {
+    // Very small deadband for narrow line - we need precision
+    if (heading_error > -0.5f && heading_error < 0.5f) {
         heading_error = 0.0f;
     }
     

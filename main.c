@@ -24,10 +24,12 @@
 // #include "debug_led/debug_led.h"
 
 // ===== Configuration =====
-#define BASE_SPEED          0.5f      // Base speed for line following (0.0 - 1.0)
-#define TURN_SPEED          0.4f      // Speed during turns
+#define BASE_SPEED          0.40f     // Base speed for line following (0.0 - 1.0) - slow for 1.5cm line
+#define TURN_SPEED          0.2f      // Speed during turns
 #define TURN_ANGLE_DEG      90.0f     // Target angle for turns
 #define TURN_TOLERANCE_DEG  5.0f      // Acceptable angle error
+
+#define EMERGENCY_STOP_PIN  20        // GP20 for emergency stop button
 
 #define LINE_FOLLOW_TASK_PRIORITY    (tskIDLE_PRIORITY + 2)
 #define BARCODE_TASK_PRIORITY        (tskIDLE_PRIORITY + 2)
@@ -37,6 +39,22 @@
 // ===== Global state =====
 static SemaphoreHandle_t state_mutex;
 static TaskHandle_t turn_task_handle = NULL;
+static volatile bool emergency_stop_triggered = false;
+
+// ===== Emergency Stop ISR =====
+void emergency_stop_isr(uint gpio, uint32_t events) {
+    // Immediately stop motors
+    motor_stop();
+    emergency_stop_triggered = true;
+    
+    // Trigger error state in state machine
+    if (state_mutex != NULL) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xSemaphoreGiveFromISR(state_mutex, &xHigherPriorityTaskWoken);
+    }
+    
+    printf("\n!!! EMERGENCY STOP TRIGGERED (GP20) !!!\n");
+}
 
 // ===== Barcode callback =====
 void on_barcode_detected(const char* decoded_str, barcode_command_t cmd) {
@@ -160,9 +178,16 @@ void line_follow_task(void *params) {
     printf("[LINE_FOLLOW] Task started\n");
     
     uint32_t off_track_count = 0;
-    const uint32_t MAX_OFF_TRACK = 25;  // 0.5 seconds at 50Hz before stopping
+    const uint32_t MAX_OFF_TRACK = 50;  // 0.5 seconds at 100Hz before stopping
     
     while (1) {
+        // Check emergency stop
+        if (emergency_stop_triggered) {
+            motor_stop();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        
         robot_state_t state;
         
         if (xSemaphoreTake(state_mutex, portMAX_DELAY)) {
@@ -237,7 +262,7 @@ void line_follow_task(void *params) {
             }
         }
         
-        vTaskDelay(pdMS_TO_TICKS(20));  // 50Hz update
+        vTaskDelay(pdMS_TO_TICKS(10));  // 100Hz update - faster for narrow 1.5cm line
     }
 }
 
@@ -366,45 +391,16 @@ int main() {
     barcode_init();
     state_machine_init();
     
+    // Initialize emergency stop button (GP20)
+    gpio_init(EMERGENCY_STOP_PIN);
+    gpio_set_dir(EMERGENCY_STOP_PIN, GPIO_IN);
+    gpio_pull_up(EMERGENCY_STOP_PIN);  // Pull-up, button connects to ground
+    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL, 
+                                       true, &emergency_stop_isr);
+    printf("[INIT] Emergency stop button initialized on GP20 (active low)\n");
+    
     // Register barcode callback
     barcode_set_callback(on_barcode_detected);
-    
-    // ===== Motor Calibration =====
-    printf("\n[CALIBRATION] Starting motor calibration...\n");
-    printf("[CALIBRATION] Testing forward motion...\n");
-    
-    // Test forward (3 seconds)
-    motor_set_speed(0.3f, 0.3f);
-    sleep_ms(3000);
-    motor_stop();
-    sleep_ms(1000);
-    
-    printf("[CALIBRATION] Testing backward motion...\n");
-    
-    // Test backward (3 seconds)
-    motor_set_speed(-0.3f, -0.3f);
-    sleep_ms(3000);
-    motor_stop();
-    sleep_ms(1000);
-    
-    printf("[CALIBRATION] Testing left turn...\n");
-    
-    // Test left turn (2 seconds)
-    motor_set_speed(-0.3f, 0.3f);
-    sleep_ms(2000);
-    motor_stop();
-    sleep_ms(1000);
-    
-    printf("[CALIBRATION] Testing right turn...\n");
-    
-    // Test right turn (2 seconds)
-    motor_set_speed(0.3f, -0.3f);
-    sleep_ms(2000);
-    motor_stop();
-    sleep_ms(1000);
-    
-    printf("[CALIBRATION] Motor calibration complete!\n");
-    printf("[CALIBRATION] Motors are working correctly.\n\n");
     
     // Create mutex
     state_mutex = xSemaphoreCreateMutex();
