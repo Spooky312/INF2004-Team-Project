@@ -21,8 +21,8 @@ void chg_direction_init(void)
     gpio_set_dir(CHG_DIRECTION_PIN, GPIO_IN);
     gpio_pull_up(CHG_DIRECTION_PIN);
 
-    // only enable, do NOT register global callback here
-    gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
+    // DO NOT enable interrupts here - that's done by gpio_router_init() in main.c
+    // gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
 }
 
 bool chg_direction_was_pressed(void)

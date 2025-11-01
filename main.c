@@ -61,17 +61,21 @@ static const char* heading_to_compass(float heading)
 
 static void gpio_irq_router(uint gpio, uint32_t events) {
     encoder_irq_handler(gpio, events);
+#if HAVE_CHG_DIRECTION
     chg_direction_irq_handler(gpio, events);
+#endif
 }
 
 void gpio_router_init(void) {
-    // Register shared callback ONCE
+    // Register shared callback ONCE - this MUST be done before any gpio_set_irq_enabled calls
     gpio_set_irq_enabled_with_callback(ENCODER_LEFT_PIN,
         GPIO_IRQ_EDGE_FALL, true, &gpio_irq_router);
 
-    // Enable all relevant pins (already done in their inits)
+    // Enable all relevant pins
     gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
+#if HAVE_CHG_DIRECTION
     gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
+#endif
 }
 
 
@@ -323,18 +327,25 @@ int main(void)
 
     debug_led_init();
     motor_init();
+    
+    // CRITICAL: Initialize GPIO pins FIRST (without enabling interrupts)
+    // Then register the interrupt handler callback
+    // Then enable the interrupts
+    
+    // Initialize GPIOs (these functions should NOT enable interrupts yet)
     encoder_init();
-    imu_init();
-    pid_init();
-
-    gpio_router_init(); 
-
 #if HAVE_CHG_DIRECTION
     chg_direction_init();
     printf("Change-direction driver active.\n");
 #else
     printf("Change-direction driver not found running forward only.\n");
 #endif
+    
+    // NOW register the interrupt handler and enable all interrupts
+    gpio_router_init(); 
+    
+    imu_init();
+    pid_init();
 
     // Allow IMU magnetometer to stabilize and pre-fill the EMA filter
     printf("\n[IMU] Stabilizing magnetometer...\n");
