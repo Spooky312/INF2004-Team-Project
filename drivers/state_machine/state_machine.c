@@ -2,7 +2,7 @@
 //  Module: Robot State Machine
 //  Description: Manages robot states for Demo 2
 // ===============================================
-#include "state_machine/state_machine.h"
+#include "state_machine.h"
 #include <stdio.h>
 #include <string.h>
 

@@ -11,20 +11,20 @@
 #include "semphr.h"
 
 // Hardware drivers
-#include "motor/motor.h"
-#include "encoder/encoder.h"
-#include "imu/imu.h"
-#include "pid/pid.h"
-#include "line_sensor/line_sensor.h"
-#include "barcode/barcode.h"
-#include "state_machine/state_machine.h"
+#include "drivers/motor/motor.h"
+#include "drivers/encoder/encoder.h"
+#include "drivers/imu/imu.h"
+#include "drivers/pid/pid.h"
+#include "drivers/line_sensor/line_sensor.h"
+#include "drivers/barcode/barcode.h"
+#include "drivers/state_machine/state_machine.h"
 
 // Optional modules (if implemented)
 // #include "mqtt/wifi_mqtt.h"
 // #include "debug_led/debug_led.h"
 
 // ===== Configuration =====
-#define BASE_SPEED 0.40f        // Base speed for line following (0.0 - 1.0) - slow for 1.5cm line
+#define BASE_SPEED 0.5f        // Base speed for line following (0.0 - 1.0) - slow for 1.5cm line
 #define TURN_SPEED 0.2f         // Speed during turns
 #define TURN_ANGLE_DEG 90.0f    // Target angle for turns
 #define TURN_TOLERANCE_DEG 5.0f // Acceptable angle error
@@ -40,6 +40,10 @@
 static SemaphoreHandle_t state_mutex;
 static TaskHandle_t turn_task_handle = NULL;
 static volatile bool emergency_stop_triggered = false;
+
+// ===== Barcode state tracking =====
+static char last_barcode_decoded[BARCODE_MAX_LEN] = "NONE";
+static uint32_t total_barcodes_detected = 0;
 
 // ===== Emergency Stop ISR =====
 void emergency_stop_isr(uint gpio, uint32_t events)
@@ -61,41 +65,82 @@ void emergency_stop_isr(uint gpio, uint32_t events)
 // ===== Barcode callback =====
 void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
 {
-    printf("\n========================================\n");
-    printf("[BARCODE] Detected: \"%s\" -> ", decoded_str);
+    total_barcodes_detected++;
+    strncpy(last_barcode_decoded, decoded_str, BARCODE_MAX_LEN - 1);
+    last_barcode_decoded[BARCODE_MAX_LEN - 1] = '\0';
+
+    printf("\n");
+    printf("╔════════════════════════════════════════╗\n");
+    printf("║    BARCODE DETECTED #%-4lu            ║\n", total_barcodes_detected);
+    printf("╠════════════════════════════════════════╣\n");
+    printf("║ Raw Code:     %-24s║\n", decoded_str);
 
     robot_event_t event = EVENT_BARCODE_FORWARD;
+    const char *action = "UNKNOWN";
+    bool valid_command = false;
 
     switch (cmd)
     {
     case CMD_LEFT:
-        printf("LEFT TURN\n");
+        action = "LEFT TURN";
         event = EVENT_BARCODE_LEFT;
+        valid_command = true;
         break;
     case CMD_RIGHT:
-        printf("RIGHT TURN\n");
+        action = "RIGHT TURN";
         event = EVENT_BARCODE_RIGHT;
+        valid_command = true;
         break;
     case CMD_STOP:
-        printf("STOP\n");
+        action = "STOP";
         event = EVENT_BARCODE_STOP;
+        valid_command = true;
         break;
     case CMD_FORWARD:
-        printf("FORWARD\n");
+        action = "FORWARD";
         event = EVENT_BARCODE_FORWARD;
+        valid_command = true;
         break;
     default:
-        printf("UNKNOWN\n");
-        return;
+        action = "INVALID/IGNORED";
+        break;
     }
 
-    printf("========================================\n\n");
+    printf("║ Command:      %-24s║\n", action);
+    
+    // Get robot status
+    float distance = encoder_get_distance_m();
+    float rpm_l = encoder_get_rpm_left();
+    float rpm_r = encoder_get_rpm_right();
+    float yaw_raw, yaw;
+    imu_get_heading_deg(&yaw_raw, &yaw);
+    
+    printf("║ Distance:     %.2fm%-20s║\n", distance, "");
+    printf("║ Speed:        %.0f / %.0f RPM%-13s║\n", rpm_l, rpm_r, "");
+    printf("║ Heading:      %.1f°%-20s║\n", yaw, "");
+    printf("║ Action:       %-24s║\n", valid_command ? "EXECUTING" : "IGNORING");
+    printf("╚════════════════════════════════════════╝\n\n");
 
-    // Trigger state machine event
-    if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+    // Only trigger state machine for valid commands
+    if (valid_command && xSemaphoreTake(state_mutex, portMAX_DELAY))
     {
         state_machine_process_event(event);
         xSemaphoreGive(state_mutex);
+    }
+}
+
+// ===== Barcode scanning task =====
+void barcode_scan_task(void *params)
+{
+    printf("[BARCODE_TASK] Task started\n");
+    
+    while (1)
+    {
+        // Call barcode_update to handle timeouts
+        // The actual barcode scanning happens in timer interrupt
+        barcode_update();
+        
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz polling
     }
 }
 
@@ -205,7 +250,7 @@ void line_follow_task(void *params)
     } search_direction_t;
 
     search_direction_t last_turn = SEARCH_NONE;
-    float search_intensity = 0.0f; // How hard to turn while searching
+    float search_intensity = 0.4f; // How hard to turn while searching
     uint32_t recovery_count = 0;   // Counter for recovery stabilization
     const uint32_t RECOVERY_CYCLES = 15; // Stabilize for 15 cycles (150ms) after finding line
     bool was_off_track = false;    // Track if we were just off the line
@@ -308,7 +353,7 @@ void line_follow_task(void *params)
             recovery_count = 0; // Reset recovery counter when off track
 
             // SEARCH PATTERN: Always turn RIGHT (robot veers left, so search right)
-            search_intensity = 0.25f; // Reduced intensity for gentler turn
+            search_intensity = 0.4f; // Reduced intensity for gentler turn
             last_turn = SEARCH_RIGHT; // Track that we're searching right
 
             // Always search right (veer right) - left wheel faster, right wheel slower
@@ -439,8 +484,10 @@ void telemetry_task(void *params)
             uint16_t line_raw = line_sensor_read_raw();
             float yaw_raw, yaw;
             imu_get_heading_deg(&yaw_raw, &yaw);
+            const char* last_barcode = barcode_get_last_decoded();
             printf("Raw Line ADC:  %u\n", line_raw);
             printf("IMU Yaw:       %.1f°\n", yaw);
+            printf("Last Barcode:  \"%s\" (Total: %lu)\n", last_barcode ? last_barcode : "none", total_barcodes_detected);
             printf("-----------------------------\n\n");
 
             xSemaphoreGive(state_mutex);

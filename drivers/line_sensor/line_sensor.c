@@ -2,7 +2,7 @@
 //  Module: Line Sensor Driver
 //  Description: ADC-based line detection for PID control
 // ===============================================
-#include "line_sensor/line_sensor.h"
+#include "line_sensor.h"
 #include <stdio.h>
 
 static uint16_t threshold = LINE_THRESHOLD;

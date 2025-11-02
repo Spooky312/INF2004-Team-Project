@@ -7,7 +7,7 @@
 #define STATE_MACHINE_H
 
 #include "pico/stdlib.h"
-#include "barcode/barcode.h"
+#include "barcode.h"
 
 // Robot states
 typedef enum {

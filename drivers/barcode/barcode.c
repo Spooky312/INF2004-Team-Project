@@ -3,7 +3,7 @@
 //  Description: Edge-based barcode scanning for junction commands
 //  Based on: Edge tracker + Code-39 decoder (FORWARD ONLY)
 // ===============================================
-#include "barcode/barcode.h"
+#include "barcode.h"
 #include <stdio.h>
 #include <string.h>
 
