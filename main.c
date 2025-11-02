@@ -6,14 +6,14 @@
 #include "motor.h"
 #include "servo.h"
 #include "ultrasonic.h"
-#include "mqtt.h"
+// #include "mqtt.h"  // Commented out - using plug-and-play implementation
 
 // ---- Pin & constants ----
 #define TRIG_PIN   17
 #define ECHO_PIN   16
 #define SERVO_PIN  15
 #define SAFE_DIST  15.0f
-#define MQTT_TOPIC "car/telemetry"
+// #define MQTT_TOPIC "car/telemetry"  // Commented out - using plug-and-play implementation
 
 static float left_scan_avg = 0.0f, right_scan_avg = 0.0f;
 static bool  obstacle_active = false;
@@ -49,9 +49,11 @@ static void task_ultrasonic(void *p) {
             motor_stop();
             printf("⚠️ Obstacle %.2f cm ahead — scanning...\n", d);
 
-            // Sweep left and right
-            left_scan_avg  = servo_scan(TRIG_PIN, ECHO_PIN, SERVO_PIN, 90, 45, 15);
-            right_scan_avg = servo_scan(TRIG_PIN, ECHO_PIN, SERVO_PIN, 90, 135, 15);
+            // Sweep left and right with wider range and smaller steps for better mapping
+            // Left: 90° -> 30° (wider left scan, 10° steps)
+            left_scan_avg  = servo_scan(TRIG_PIN, ECHO_PIN, SERVO_PIN, 90, 30, 10);
+            // Right: 90° -> 150° (wider right scan, 10° steps)
+            right_scan_avg = servo_scan(TRIG_PIN, ECHO_PIN, SERVO_PIN, 90, 150, 10);
             servo_set_angle(SERVO_PIN, 90);
 
             // Decide direction
@@ -59,12 +61,13 @@ static void task_ultrasonic(void *p) {
             printf("Left = %.2f cm, Right = %.2f cm → %s path\n",
                    left_scan_avg, right_scan_avg, dir);
 
-            char msg[128];
-            snprintf(msg, sizeof msg,
-                     "{\"event\":\"obstacle\",\"front\":%.2f,"
-                     "\"left\":%.2f,\"right\":%.2f,\"decision\":\"%s\"}",
-                     d, left_scan_avg, right_scan_avg, dir);
-            mqtt_publish_message(MQTT_TOPIC, msg);
+            // MQTT publishing commented out - using plug-and-play implementation
+            // char msg[128];
+            // snprintf(msg, sizeof msg,
+            //          "{\"event\":\"obstacle\",\"front\":%.2f,"
+            //          "\"left\":%.2f,\"right\":%.2f,\"decision\":\"%s\"}",
+            //          d, left_scan_avg, right_scan_avg, dir);
+            // mqtt_publish_message(MQTT_TOPIC, msg);
 
             // Turn accordingly
             if (right_scan_avg > left_scan_avg)
@@ -80,7 +83,7 @@ static void task_ultrasonic(void *p) {
 
             obstacle_active = false;
             printf("✅ Rejoined line / path\n");
-            mqtt_publish_message(MQTT_TOPIC, "{\"event\":\"resume\"}");
+            // mqtt_publish_message(MQTT_TOPIC, "{\"event\":\"resume\"}");  // Commented out - using plug-and-play implementation
         }
 
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -101,15 +104,16 @@ static void task_motor(void *p) {
 
 // ---------------------------------------------------------
 // Task: Maintain MQTT connection & network polling
-static void task_mqtt(void *p) {
-    mqtt_setup("Yh","tffycmzith","192.168.23.8",MQTT_TOPIC);
-    mqtt_task(NULL);
-}
+// Commented out - using plug-and-play implementation
+// static void task_mqtt(void *p) {
+//     mqtt_setup("Yh","tffycmzith","192.168.23.8",MQTT_TOPIC);
+//     mqtt_task(NULL);
+// }
 
 // ---------------------------------------------------------
 int main() {
     stdio_init_all();
-    xTaskCreate(task_mqtt, "mqtt", 4096, NULL, 1, NULL);
+    // xTaskCreate(task_mqtt, "mqtt", 4096, NULL, 1, NULL);  // Commented out - using plug-and-play implementation
     xTaskCreate(task_ultrasonic, "ultra", 4096, NULL, 2, NULL);
     xTaskCreate(task_motor, "motor", 2048, NULL, 1, NULL);
     vTaskStartScheduler();

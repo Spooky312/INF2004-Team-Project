@@ -16,11 +16,11 @@
 
 /* System options *************************************************************/
 
-// Run without OS
+// Run with FreeRTOS
 //
-//  No OS on Pico W platform
+//  Using FreeRTOS on Pico W platform
 //
-#define NO_SYS                      1
+#define NO_SYS                      0
 
 
 
