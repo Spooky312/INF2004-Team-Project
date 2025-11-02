@@ -45,21 +45,32 @@ static volatile bool emergency_stop_triggered = false;
 static char last_barcode_decoded[BARCODE_MAX_LEN] = "NONE";
 static uint32_t total_barcodes_detected = 0;
 
+// ===== GPIO Interrupt Router =====
+// Routes GPIO interrupts to the appropriate handler
+void gpio_interrupt_router(uint gpio, uint32_t events)
+{
+    if (gpio == EMERGENCY_STOP_PIN) {
+        // Handle emergency stop
+        motor_stop();
+        emergency_stop_triggered = true;
+        
+        if (state_mutex != NULL) {
+            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+            xSemaphoreGiveFromISR(state_mutex, &xHigherPriorityTaskWoken);
+        }
+        printf("\n!!! EMERGENCY STOP TRIGGERED (GP20) !!!\n");
+    }
+    else if (gpio == 3 || gpio == 26) {
+        // Route to encoder handler (GP3 = left, GP26 = right)
+        encoder_irq_handler(gpio, events);
+    }
+}
+
 // ===== Emergency Stop ISR =====
 void emergency_stop_isr(uint gpio, uint32_t events)
 {
-    // Immediately stop motors
-    motor_stop();
-    emergency_stop_triggered = true;
-
-    // Trigger error state in state machine
-    if (state_mutex != NULL)
-    {
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        xSemaphoreGiveFromISR(state_mutex, &xHigherPriorityTaskWoken);
-    }
-
-    printf("\n!!! EMERGENCY STOP TRIGGERED (GP20) !!!\n");
+    // Now handled by gpio_interrupt_router
+    // This function kept for compatibility but unused
 }
 
 // ===== Barcode callback =====
@@ -516,13 +527,20 @@ int main()
     barcode_init();
     state_machine_init();
 
+    // Setup GPIO interrupt router for emergency stop + encoders
+    printf("[INIT] Setting up GPIO interrupts...\n");
+    
     // Initialize emergency stop button (GP20)
     gpio_init(EMERGENCY_STOP_PIN);
     gpio_set_dir(EMERGENCY_STOP_PIN, GPIO_IN);
     gpio_pull_up(EMERGENCY_STOP_PIN); // Pull-up, button connects to ground
-    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL,
-                                       true, &emergency_stop_isr);
-    printf("[INIT] Emergency stop button initialized on GP20 (active low)\n");
+    
+    // Enable interrupts with shared router callback
+    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL, true, &gpio_interrupt_router);
+    gpio_set_irq_enabled(3, GPIO_IRQ_EDGE_FALL, true);   // Left encoder
+    gpio_set_irq_enabled(26, GPIO_IRQ_EDGE_FALL, true);  // Right encoder
+    
+    printf("[INIT] GPIO interrupts enabled: GP20 (emergency stop), GP3 (left encoder), GP26 (right encoder)\n");
 
     // Register barcode callback
     barcode_set_callback(on_barcode_detected);
