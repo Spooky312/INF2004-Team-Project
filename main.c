@@ -19,13 +19,9 @@
 #include "drivers/barcode/barcode.h"
 #include "drivers/state_machine/state_machine.h"
 
-// Optional modules (if implemented)
-// #include "mqtt/wifi_mqtt.h"
-// #include "debug_led/debug_led.h"
-
 // ===== Configuration =====
-#define BASE_SPEED 0.5f        // Base speed for line following (0.0 - 1.0) - slow for 1.5cm line
-#define TURN_SPEED 0.2f         // Speed during turns
+#define BASE_SPEED 0.5f         // Base speed for line following
+#define TURN_SPEED 0.20f        // Speed during 90° turns
 #define TURN_ANGLE_DEG 90.0f    // Target angle for turns
 #define TURN_TOLERANCE_DEG 5.0f // Acceptable angle error
 
@@ -40,6 +36,7 @@
 static SemaphoreHandle_t state_mutex;
 static TaskHandle_t turn_task_handle = NULL;
 static volatile bool emergency_stop_triggered = false;
+static volatile bool barcode_scanning_active = false;
 
 // ===== Barcode state tracking =====
 static char last_barcode_decoded[BARCODE_MAX_LEN] = "NONE";
@@ -64,13 +61,6 @@ void gpio_interrupt_router(uint gpio, uint32_t events)
         // Route to encoder handler (GP3 = left, GP26 = right)
         encoder_irq_handler(gpio, events);
     }
-}
-
-// ===== Emergency Stop ISR =====
-void emergency_stop_isr(uint gpio, uint32_t events)
-{
-    // Now handled by gpio_interrupt_router
-    // This function kept for compatibility but unused
 }
 
 // ===== Barcode callback =====
@@ -252,7 +242,7 @@ void line_follow_task(void *params)
 {
     printf("[LINE_FOLLOW] Task started\n");
 
-    // Single-sensor line following variables
+    // Single-sensor line following variables (from original)
     typedef enum
     {
         SEARCH_NONE,
@@ -265,6 +255,14 @@ void line_follow_task(void *params)
     uint32_t recovery_count = 0;   // Counter for recovery stabilization
     const uint32_t RECOVERY_CYCLES = 15; // Stabilize for 15 cycles (150ms) after finding line
     bool was_off_track = false;    // Track if we were just off the line
+
+    // Barcode mode variables
+    volatile bool barcode_scanning_active = false;
+    float barcode_reference_heading = 0.0f;
+    uint32_t time_on_line_start = 0;
+    uint32_t barcode_mode_start_time = 0;
+    const uint32_t BARCODE_ENABLE_TIME_MS = 500;
+    const uint32_t BARCODE_TIMEOUT_MS = 2000;
 
     while (1)
     {
@@ -294,91 +292,153 @@ void line_follow_task(void *params)
         {
             was_off_track = false;
             last_turn = SEARCH_NONE;
-            search_intensity = 0.0f;
+            search_intensity = 0.4f;
             recovery_count = 0;
+            barcode_scanning_active = false;
+            time_on_line_start = 0;
+            pid_init();
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
-        // Read line sensor
+        // Read sensors
         line_state_t line_state = line_sensor_read();
+        float current_heading_raw, current_heading;
+        imu_get_heading_deg(&current_heading_raw, &current_heading);
+        uint32_t now = to_ms_since_boot(get_absolute_time());
 
         // Check if on line
         if (line_state == LINE_BLACK)
         {
-            // ON LINE - check if we just recovered from searching
-            if (was_off_track && recovery_count < RECOVERY_CYCLES)
+            // ===== ON LINE =====
+            
+            // Track time on line for barcode mode
+            if (time_on_line_start == 0)
             {
-                // RECOVERY MODE: Countersteer briefly to prevent overshoot
+                time_on_line_start = now;
+            }
+            
+            uint32_t time_on_line = now - time_on_line_start;
+            
+            // Activate barcode scan mode after stable tracking
+            if (!barcode_scanning_active && time_on_line > BARCODE_ENABLE_TIME_MS)
+            {
+                barcode_scanning_active = true;
+                barcode_mode_start_time = now;
+                barcode_reference_heading = current_heading;
+                pid_init(); // Reset PID for barcode mode
+                printf("[LINE_FOLLOW] Barcode scan mode ON (heading: %.1f°)\n", barcode_reference_heading);
+            }
+            
+            // Check barcode timeout
+            if (barcode_scanning_active)
+            {
+                uint32_t time_in_barcode = now - barcode_mode_start_time;
+                if (time_in_barcode > BARCODE_TIMEOUT_MS)
+                {
+                    barcode_scanning_active = false;
+                    time_on_line_start = now;
+                    printf("[LINE_FOLLOW] Barcode mode OFF (timeout)\n");
+                }
+            }
+            
+            float left_cmd, right_cmd;
+            
+            if (barcode_scanning_active)
+            {
+                // **BARCODE MODE: Go perfectly straight using IMU + PID**
+                float heading_error = barcode_reference_heading - current_heading;
+                
+                // Normalize error to [-180, 180]
+                while (heading_error > 180.0f) heading_error -= 360.0f;
+                while (heading_error < -180.0f) heading_error += 360.0f;
+                
+                // Apply deadband
+                if (fabs(heading_error) < 1.5f)
+                {
+                    heading_error = 0.0f;
+                }
+                
+                // Use PID to compute correction
+                float heading_correction = pid_compute_heading(heading_error);
+                
+                // Limit correction
+                const float MAX_HEADING_CORRECTION = 0.20f;
+                if (heading_correction > MAX_HEADING_CORRECTION) heading_correction = MAX_HEADING_CORRECTION;
+                if (heading_correction < -MAX_HEADING_CORRECTION) heading_correction = -MAX_HEADING_CORRECTION;
+                
+                // Apply correction to maintain straight heading
+                left_cmd = BASE_SPEED - heading_correction;
+                right_cmd = BASE_SPEED + heading_correction;
+            }
+            else if (was_off_track && recovery_count < RECOVERY_CYCLES)
+            {
+                // **RECOVERY MODE: Countersteer briefly to prevent overshoot (original behavior)**
                 recovery_count++;
                 
                 // Apply stronger counter-turn opposite to search direction
-                float left_speed, right_speed;
                 if (last_turn == SEARCH_RIGHT)
                 {
                     // Was turning right, so countersteer left strongly
-                    left_speed = BASE_SPEED - 0.35f;  // Slow left wheel significantly
-                    right_speed = BASE_SPEED;         // Normal right wheel
+                    left_cmd = BASE_SPEED - 0.35f;  // Slow left wheel significantly
+                    right_cmd = BASE_SPEED;         // Normal right wheel
                 }
                 else
                 {
                     // Default: go straight slowly
-                    left_speed = BASE_SPEED * 0.7f;
-                    right_speed = BASE_SPEED * 0.7f;
-                }
-                
-                motor_set_speed(left_speed, right_speed);
-                
-                float distance = encoder_get_distance_m();
-                if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-                {
-                    state_machine_update_context(left_speed, right_speed, distance,
-                                                 0.0f, true);
-                    xSemaphoreGive(state_mutex);
+                    left_cmd = BASE_SPEED * 0.7f;
+                    right_cmd = BASE_SPEED * 0.7f;
                 }
             }
             else
             {
-                // NORMAL MODE: Go straight, reset all counters
+                // **NORMAL MODE: Go straight, reset all counters (original behavior)**
                 was_off_track = false;
                 recovery_count = 0;
-                search_intensity = 0.0f;
+                search_intensity = 0.4f;
                 last_turn = SEARCH_NONE;
 
-                motor_set_speed(BASE_SPEED, BASE_SPEED);
+                left_cmd = BASE_SPEED;
+                right_cmd = BASE_SPEED;
+            }
 
-                // Update state machine context
-                float distance = encoder_get_distance_m();
-                if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-                {
-                    state_machine_update_context(BASE_SPEED, BASE_SPEED, distance,
-                                                 0.0f, true);
-                    xSemaphoreGive(state_mutex);
-                }
+            motor_set_speed(left_cmd, right_cmd);
+
+            // Update state machine context
+            float distance = encoder_get_distance_m();
+            if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+            {
+                state_machine_update_context(left_cmd, right_cmd, distance, 0.0f, true);
+                xSemaphoreGive(state_mutex);
             }
         }
         else
         {
-            // OFF LINE - search for it
+            // ===== OFF LINE: Search for it (original behavior) =====
             was_off_track = true;
             recovery_count = 0; // Reset recovery counter when off track
+            time_on_line_start = 0;
+            
+            if (barcode_scanning_active)
+            {
+                barcode_scanning_active = false;
+                printf("[LINE_FOLLOW] Barcode mode OFF (line lost)\n");
+            }
 
             // SEARCH PATTERN: Always turn RIGHT (robot veers left, so search right)
             search_intensity = 0.4f; // Reduced intensity for gentler turn
             last_turn = SEARCH_RIGHT; // Track that we're searching right
 
             // Always search right (veer right) - left wheel faster, right wheel slower
-            // Always search right (veer right) - left wheel faster, right wheel slower
             float left_speed = BASE_SPEED;
-            float right_speed = BASE_SPEED - search_intensity;  // 0.40 - 0.25 = 0.15
+            float right_speed = BASE_SPEED - search_intensity;  // 0.5 - 0.4 = 0.1
 
             motor_set_speed(left_speed, right_speed);
 
             float distance = encoder_get_distance_m();
             if (xSemaphoreTake(state_mutex, portMAX_DELAY))
             {
-                state_machine_update_context(left_speed, right_speed, distance,
-                                             0.0f, false);
+                state_machine_update_context(left_speed, right_speed, distance, 0.0f, false);
                 xSemaphoreGive(state_mutex);
             }
         }
@@ -387,7 +447,7 @@ void line_follow_task(void *params)
     }
 }
 
-// ===== State monitor task (handles state transitions) =====
+// ===== State monitor task =====
 void state_monitor_task(void *params)
 {
     printf("[STATE_MONITOR] Task started\n");
@@ -468,7 +528,7 @@ void telemetry_task(void *params)
 
     while (1)
     {
-        vTaskDelay(pdMS_TO_TICKS(200)); // Report every 200ms (5Hz - faster logs)
+        vTaskDelay(pdMS_TO_TICKS(200)); // 5Hz
 
         const robot_context_t *ctx;
         robot_state_t state;
@@ -478,27 +538,28 @@ void telemetry_task(void *params)
             ctx = state_machine_get_context();
             state = ctx->current_state;
 
-            // Print telemetry
             printf("\n----- Telemetry Report #%lu -----\n", ++report_count);
             printf("State:         %s\n", state_machine_state_name(state));
             printf("Line Error:    %.3f\n", ctx->line_error);
             printf("Line Status:   %s\n", ctx->line_on_track ? "ON TRACK" : "OFF TRACK");
             printf("Speed L/R:     %.2f / %.2f\n", ctx->current_speed_left, ctx->current_speed_right);
+            printf("RPM L/R:       %.0f / %.0f\n", encoder_get_rpm_left(), encoder_get_rpm_right());
             printf("Distance:      %.2f m\n", ctx->distance_traveled_m);
             printf("Last Barcode:  %s\n",
-                   ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT"
-                                                            : ctx->last_barcode_cmd == CMD_STOP    ? "STOP"
-                                                            : ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD"
-                                                                                                   : "NONE");
+                   ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : 
+                   ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT" :
+                   ctx->last_barcode_cmd == CMD_STOP ? "STOP" :
+                   ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD" : "NONE");
 
-            // Get raw sensor values
             uint16_t line_raw = line_sensor_read_raw();
             float yaw_raw, yaw;
             imu_get_heading_deg(&yaw_raw, &yaw);
             const char* last_barcode = barcode_get_last_decoded();
             printf("Raw Line ADC:  %u\n", line_raw);
             printf("IMU Yaw:       %.1f°\n", yaw);
-            printf("Last Barcode:  \"%s\" (Total: %lu)\n", last_barcode ? last_barcode : "none", total_barcodes_detected);
+            printf("Last Barcode:  \"%s\" (Total: %lu)\n", 
+                   last_barcode ? last_barcode : "none", total_barcodes_detected);
+            printf("Barcode Mode:  %s\n", barcode_scanning_active ? "ACTIVE" : "OFF");
             printf("-----------------------------\n\n");
 
             xSemaphoreGive(state_mutex);
@@ -510,14 +571,13 @@ void telemetry_task(void *params)
 int main()
 {
     stdio_init_all();
-    sleep_ms(2000); // Wait for USB serial
+    sleep_ms(2000);
 
     printf("\n\n");
     printf("========================================\n");
     printf("  Demo 2: Line Following + Barcode\n");
     printf("========================================\n\n");
 
-    // Initialize hardware
     printf("[INIT] Initializing hardware...\n");
     motor_init();
     encoder_init();
@@ -527,30 +587,24 @@ int main()
     barcode_init();
     state_machine_init();
 
-    // Setup GPIO interrupt router for emergency stop + encoders
     printf("[INIT] Setting up GPIO interrupts...\n");
     
-    // Initialize emergency stop button (GP20)
     gpio_init(EMERGENCY_STOP_PIN);
     gpio_set_dir(EMERGENCY_STOP_PIN, GPIO_IN);
-    gpio_pull_up(EMERGENCY_STOP_PIN); // Pull-up, button connects to ground
+    gpio_pull_up(EMERGENCY_STOP_PIN);
     
-    // Enable interrupts with shared router callback
-    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL, true, &gpio_interrupt_router);
-    gpio_set_irq_enabled(3, GPIO_IRQ_EDGE_FALL, true);   // Left encoder
-    gpio_set_irq_enabled(26, GPIO_IRQ_EDGE_FALL, true);  // Right encoder
+    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL, 
+                                       true, &gpio_interrupt_router);
+    gpio_set_irq_enabled(3, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(26, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
     
-    printf("[INIT] GPIO interrupts enabled: GP20 (emergency stop), GP3 (left encoder), GP26 (right encoder)\n");
+    printf("[INIT] Interrupts enabled: GP3 (left), GP26 (right), GP20 (e-stop)\n");
 
-    // Register barcode callback
     barcode_set_callback(on_barcode_detected);
-
-    // Create mutex
     state_mutex = xSemaphoreCreateMutex();
 
     printf("[INIT] Creating FreeRTOS tasks...\n");
 
-    // Create tasks
     xTaskCreate(line_follow_task, "LineFollow", 2048, NULL,
                 LINE_FOLLOW_TASK_PRIORITY, NULL);
     xTaskCreate(state_monitor_task, "StateMonitor", 2048, NULL,
