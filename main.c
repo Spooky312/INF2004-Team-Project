@@ -39,7 +39,7 @@
 // -----------------------------------------------
 // Global Variables
 // -----------------------------------------------
-static float target_speed   = 80.0f;  // Reduced from 150 - adjust as needed (0-255)
+static float target_speed   = 50.0f;  // Reduced from 80 for more stable control (0-255)
 static float target_heading = 0.0f;
 
 // -----------------------------------------------
@@ -66,7 +66,9 @@ static const char* heading_to_compass(float heading)
 static void gpio_irq_router(uint gpio, uint32_t events) {
     encoder_irq_handler(gpio, events);
 
+#if HAVE_CHG_DIRECTION
     chg_direction_irq_handler(gpio, events);
+#endif
 }
 
 void gpio_router_init(void) {
@@ -77,7 +79,9 @@ void gpio_router_init(void) {
     // Enable all relevant pins (already done in their inits)
     gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
 
+#if HAVE_CHG_DIRECTION
     gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
+#endif
 }
 
 
@@ -199,31 +203,41 @@ static void pid_task(void *p)
         else
             debug_led_set(19, false);
 
-        // ---- PID control ----
+        // ---- PID control with individual wheel feedback ----
         // Determine direction from state: 1=forward, 2=backward
         int direction = (state == 1) ? 1 : -1;
-        float avg_rpm = (rpm_l + rpm_r) / 2.0f;
+        
+        // Calculate heading error and correction
         float heading_error = target_heading - heading_filt;
         if (heading_error > 180.0f) heading_error -= 360.0f;
         if (heading_error < -180.0f) heading_error += 360.0f;
-
-        float speed_corr   = pid_compute_speed(target_speed, avg_rpm);
         float heading_corr = pid_compute_heading(heading_error);
 
-        // Heading correction: positive correction = turn left (slow right motor)
-        // negative correction = turn right (slow left motor)
-        float left_output  = direction * (target_speed + speed_corr + heading_corr);
-        float right_output = direction * (target_speed + speed_corr - heading_corr);
+        // Desired speeds with heading correction applied
+        // Positive heading_corr = need to turn left (increase left, decrease right)
+        float desired_speed_left  = target_speed + heading_corr;
+        float desired_speed_right = target_speed - heading_corr;
+
+        // Individual wheel PID control based on actual encoder feedback
+        float speed_corr_left  = pid_compute_speed_left(desired_speed_left, rpm_l);
+        float speed_corr_right = pid_compute_speed_right(desired_speed_right, rpm_r);
+
+        // Final motor outputs
+        float left_output  = direction * (desired_speed_left + speed_corr_left);
+        float right_output = direction * (desired_speed_right + speed_corr_right);
 
         // Debug output every 50 loops (1 second)
         if (++loop_count >= 50) {
             const char* state_names[] = {"STOPPED", "FORWARD", "BACKWARD"};
-            // <-- FIX: Added heading_raw and heading_filt to the debug print
-            printf("[PID] %s: L=%.1f R=%.1f (tgt=%.1f rpm=%.1f)\n",
-                   state_names[state], left_output, right_output, target_speed, avg_rpm);
+            float avg_rpm = (rpm_l + rpm_r) / 2.0f;
+            printf("[PID] %s: L=%.1f(%.1frpm) R=%.1f(%.1frpm) Tgt=%.1f Avg=%.1f\n",
+                   state_names[state], left_output, rpm_l, right_output, rpm_r, 
+                   target_speed, avg_rpm);
             printf("[PID] Head: Target=%.2f°(%s) Current=%.2f° Err=%.2f° Corr=%.2f\n",
                    target_heading, heading_to_compass(target_heading), 
                    heading_filt, heading_error, heading_corr);
+            printf("[PID] Desired: L=%.1f R=%.1f | Corrections: L=%.2f R=%.2f\n",
+                   desired_speed_left, desired_speed_right, speed_corr_left, speed_corr_right);
             loop_count = 0;
         }
 
@@ -239,11 +253,11 @@ static void telemetry_task(void *p)
 {
     TickType_t last = xTaskGetTickCount();
     printf("[TELEM] Task loop starting\n");
+    
+    static int mqtt_fail_count = 0;
 
     for (;;)
     {
-        printf("[TELEM] Loop iteration\n");
-        
         float rpm_l = encoder_get_rpm_left();
         float rpm_r = encoder_get_rpm_right();
         float dist  = encoder_get_distance_m();
@@ -262,18 +276,23 @@ static void telemetry_task(void *p)
                  "\"ticks_l\":%lu,\"ticks_r\":%lu}",
                  rpm_l, rpm_r, dist, target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
 
-        printf("Telemetry: %s\n", msg);
+        printf("[TELEM] %s\n", msg);
         
         // ENCODER DIAGNOSTIC - if ticks are 0, encoders aren't working!
         if (ticks_l == 0 && ticks_r == 0) {
-            printf("[WARN] No encoder ticks detected! Check connections:\n");
-            printf("       Left encoder: GP27 (Grove Port 5)\n");
-            printf("       Right encoder: GP6 (Grove Port 6)\n");
+            printf("[TELEM] [WARN] No encoder ticks detected!\n");
         }
         
         // Publish via MQTT if connected
         if (mqtt_app_is_connected()) {
             mqtt_app_publish("pico/telemetry", msg, 0, 0);
+            printf("[TELEM] ✅ Published to MQTT topic: pico/telemetry\n");
+            mqtt_fail_count = 0;
+        } else {
+            mqtt_fail_count++;
+            if (mqtt_fail_count <= 3 || mqtt_fail_count % 10 == 0) {
+                printf("[TELEM] ❌ MQTT not connected - message not published (fail #%d)\n", mqtt_fail_count);
+            }
         }
 
 
@@ -288,50 +307,81 @@ static void telemetry_task(void *p)
 // -----------------------------------------------
 int main(void)
 {
+    // Basic initialization
     stdio_init_all();
-    sleep_ms(500);
-    printf("=== Demo 1: PID + IMU + MQTT + LEDs ===\n");
-
+    
+    // Wait for USB serial to be ready
+    sleep_ms(3000);
+    
+    // Infinite loop with output to verify serial works
+    printf("\n\n\n=== SERIAL TEST ===\n");
+    printf("If you see this, serial is working!\n");
+    
+    int counter = 0;
+    while (counter < 5) {
+        printf("Test message %d\n", counter);
+        sleep_ms(1000);
+        counter++;
+    }
+    
+    printf("\n[INIT] Starting hardware initialization...\n");
+    
+    printf("[INIT] Debug LED...\n");
     debug_led_init();
-    // motor_init();
-    // encoder_init();
-    // imu_init();
-    // pid_init();
-
-    // gpio_router_init(); 
-
-// #if HAVE_CHG_DIRECTION
-//     chg_direction_init();
-//     printf("Change-direction driver active.\n");
-// #else
-//     printf("Change-direction driver not found running forward only.\n");
-// #endif
-
-//     printf("\n[IMU] Stabilizing magnetometer...\n");
-//     sleep_ms(100);  // Give sensor time to settle
     
-//     float heading_raw, heading_filt;
-//     for (int i = 0; i < 10; i++) {
-//         imu_get_heading_deg(&heading_raw, &heading_filt);
-//         sleep_ms(50);
-//     }
+    printf("[INIT] Motor driver...\n");
+    motor_init();
     
-//     target_heading = heading_filt;
-//     printf("[HEADING] Target heading set to: %.2f° (%s)\n", 
-//            target_heading, heading_to_compass(target_heading));
+    printf("[INIT] Encoder driver...\n");
+    encoder_init();
+    
+    printf("[INIT] IMU sensor...\n");
+    imu_init();
+    
+    printf("[INIT] PID controller...\n");
+    pid_init();
+
+    printf("[INIT] GPIO interrupt router...\n");
+    gpio_router_init(); 
+
+#if HAVE_CHG_DIRECTION
+    printf("[INIT] Change-direction button...\n");
+    chg_direction_init();
+    printf("[INFO] Change-direction driver active.\n");
+#else
+    printf("[INFO] Change-direction driver not available - forward only mode.\n");
+#endif
+
+    printf("\n[IMU] Stabilizing magnetometer...\n");
+    sleep_ms(100);  // Give sensor time to settle
+    
+    float heading_raw, heading_filt;
+    printf("[IMU] Reading initial heading samples...\n");
+    for (int i = 0; i < 10; i++) {
+        if (imu_get_heading_deg(&heading_raw, &heading_filt)) {
+            printf("  Sample %d: %.2f° (raw) %.2f° (filtered)\n", i+1, heading_raw, heading_filt);
+        } else {
+            printf("  Sample %d: IMU read failed!\n", i+1);
+        }
+        sleep_ms(50);
+    }
+    
+    target_heading = heading_filt;
+    printf("[HEADING] Target heading set to: %.2f° (%s)\n", 
+           target_heading, heading_to_compass(target_heading));
 
     printf("\n[INFO] Creating FreeRTOS tasks...\n");
     printf("      Creating Network Manager task...\n");
     xTaskCreate(network_manager_task, "NetMgr", 2048, NULL, NET_TASK_PRIORITY, NULL);
 
-    // printf("      Creating PID task...\n");
-    // xTaskCreate(pid_task, "PID", 2048, NULL, PID_TASK_PRIORITY, NULL);
+    printf("      Creating PID task...\n");
+    xTaskCreate(pid_task, "PID", 2048, NULL, PID_TASK_PRIORITY, NULL);
 
-    // printf("      Creating Telemetry task...\n");
-    // xTaskCreate(telemetry_task, "Telemetry", 2048, NULL, TELEMETRY_TASK_PRIORITY, NULL);
+    printf("      Creating Telemetry task...\n");
+    xTaskCreate(telemetry_task, "Telemetry", 2048, NULL, TELEMETRY_TASK_PRIORITY, NULL);
 
-    // printf("\n[INFO] Starting FreeRTOS scheduler...\n");
-    // printf("========================================\n\n");
+    printf("\n[INFO] Starting FreeRTOS scheduler...\n");
+    printf("========================================\n\n");
     
     vTaskStartScheduler();
     

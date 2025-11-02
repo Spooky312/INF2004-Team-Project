@@ -4,6 +4,7 @@
 //               to indicate the robot should reverse direction.
 // ===============================================
 #include "chg_direction.h"
+#include <stdio.h>
 
 #define CHG_DIRECTION_PIN 21   // adjust as wired
 
@@ -21,8 +22,9 @@ void chg_direction_init(void)
     gpio_set_dir(CHG_DIRECTION_PIN, GPIO_IN);
     gpio_pull_up(CHG_DIRECTION_PIN);
 
-    // only enable, do NOT register global callback here
-    gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
+    // NOTE: IRQ enabling is done in gpio_router_init() after callback is registered
+    // Do NOT call gpio_set_irq_enabled here or it will assert!
+    printf("[CHG_DIR] Button pin configured (interrupt enabled later).\n");
 }
 
 bool chg_direction_was_pressed(void)

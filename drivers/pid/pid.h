@@ -10,8 +10,9 @@
 // ---- PID initialization ----
 void pid_init(void);
 
-// ---- Compute corrections ----
-float pid_compute_speed(float target_speed, float measured_speed);
+// ---- Compute corrections (individual wheel control) ----
+float pid_compute_speed_left(float target_speed, float measured_speed);
+float pid_compute_speed_right(float target_speed, float measured_speed);
 float pid_compute_heading(float heading_error);
 
 // ---- Get PID gains (for debugging/tuning) ----

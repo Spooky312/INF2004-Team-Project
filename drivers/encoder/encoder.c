@@ -48,17 +48,17 @@ void encoder_init(void)
 {
     gpio_init(ENCODER_LEFT_PIN);
     gpio_set_dir(ENCODER_LEFT_PIN, GPIO_IN);
-    gpio_pull_up(ENCODER_LEFT_PIN);   // <-- FIXED
+    gpio_pull_up(ENCODER_LEFT_PIN);
 
     gpio_init(ENCODER_RIGHT_PIN);
     gpio_set_dir(ENCODER_RIGHT_PIN, GPIO_IN);
-    gpio_pull_up(ENCODER_RIGHT_PIN);  // <-- FIXED
+    gpio_pull_up(ENCODER_RIGHT_PIN);
 
-    gpio_set_irq_enabled(ENCODER_LEFT_PIN, GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
+    // NOTE: IRQ enabling is done in gpio_router_init() after callback is registered
+    // Do NOT call gpio_set_irq_enabled here or it will assert!
 
     last_left_time = last_right_time = get_absolute_time();
-    printf("[ENC] Encoder interrupts initialized.\n");
+    printf("[ENC] Encoder pins configured (interrupts enabled later).\n");
 }
 
 
