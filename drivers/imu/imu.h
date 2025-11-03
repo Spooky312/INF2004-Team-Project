@@ -11,8 +11,8 @@
 
 // ---- Public configuration ----
 #define IMU_I2C           i2c0
-#define IMU_I2C_SDA       4         // GP4  (adjust if wired differently)
-#define IMU_I2C_SCL       5         // GP5
+#define IMU_I2C_SDA       16        // GP16 (Robo Pico board)
+#define IMU_I2C_SCL       17        // GP17
 #define IMU_I2C_BAUD_HZ   400000
 
 // Magnetic declination in radians (set for your location; 0 for demo)
