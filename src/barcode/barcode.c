@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
+// All configuration moved to robot_config.h
+
 // ===== Edge detection state =====
 typedef enum { EDGE_NONE=0, EDGE_RISE, EDGE_FALL } edge_t;
 
@@ -194,7 +196,7 @@ static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
 static bool timer_cb(struct repeating_timer *t) {
     if (!scanning_active) return true;
     
-    raw_level = gpio_get(BARCODE_IR_PIN);
+    raw_level = gpio_get(BARCODE_IR_DO_PIN);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
     static uint8_t  pending_level = 0xFF;
@@ -239,18 +241,18 @@ static struct repeating_timer barcode_timer;
 
 // ===== Public API =====
 void barcode_init(void) {
-    gpio_init(BARCODE_IR_PIN);
-    gpio_set_dir(BARCODE_IR_PIN, GPIO_IN);
-    gpio_pull_up(BARCODE_IR_PIN);
+    gpio_init(BARCODE_IR_DO_PIN);
+    gpio_set_dir(BARCODE_IR_DO_PIN, GPIO_IN);
+    gpio_pull_up(BARCODE_IR_DO_PIN);
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    raw_level = stable_level = prev_stable_level = gpio_get(BARCODE_IR_PIN);
+    raw_level = stable_level = prev_stable_level = gpio_get(BARCODE_IR_DO_PIN);
     last_change_ms = now_ms;
     last_activity_ms = now_ms;
     
     decoded_msg[0] = '\0';
     
-    printf("[BARCODE] Initialized on GPIO %d\n", BARCODE_IR_PIN);
+    printf("[BARCODE] Initialized on GPIO %d\n", BARCODE_IR_DO_PIN);
 }
 
 void barcode_start_scanning(void) {

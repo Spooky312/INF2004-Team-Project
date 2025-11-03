@@ -25,11 +25,11 @@
 // ---- Helpers ----
 static inline int i2c_w1(uint8_t addr, uint8_t reg, uint8_t val) {
     uint8_t buf[2] = {reg, val};
-    return i2c_write_blocking(IMU_I2C, addr, buf, 2, false);
+    return i2c_write_blocking(IMU_I2C_INST, addr, buf, 2, false);
 }
 static inline int i2c_rn(uint8_t addr, uint8_t reg, uint8_t *dst, size_t n) {
-    i2c_write_blocking(IMU_I2C, addr, &reg, 1, true);
-    return i2c_read_blocking(IMU_I2C, addr, dst, n, false);
+    i2c_write_blocking(IMU_I2C_INST, addr, &reg, 1, true);
+    return i2c_read_blocking(IMU_I2C_INST, addr, dst, n, false);
 }
 
 // ---- State ----
@@ -44,7 +44,7 @@ static inline float clampf(float x, float lo, float hi){ return x<lo?lo:(x>hi?hi
 void imu_init(void)
 {
     // I2C pins + speed
-    i2c_init(IMU_I2C, IMU_I2C_BAUD_HZ);
+    i2c_init(IMU_I2C_INST, IMU_I2C_BAUD_HZ);
     gpio_set_function(IMU_I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(IMU_I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(IMU_I2C_SDA);

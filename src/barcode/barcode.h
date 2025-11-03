@@ -7,14 +7,15 @@
 
 #include "pico/stdlib.h"
 #include <stdbool.h>
+#include "robot_config.h"
 
-// Configuration
-#define BARCODE_IR_PIN      28
-#define BARCODE_SAMPLE_MS   1
-#define BARCODE_VERIFY_MS   2
-#define BARCODE_BAR_IS_LOW  0      // 0: black = HIGH, 1: black = LOW
-#define BARCODE_RESET_MS    1000   // Reset if no activity (ms)
-#define BARCODE_MAX_LEN     16     // Max decoded message length
+// Configuration now in robot_config.h:
+// - BARCODE_IR_DO_PIN
+// - BARCODE_SAMPLE_MS
+// - BARCODE_VERIFY_MS
+// - BARCODE_BAR_IS_LOW
+// - BARCODE_RESET_MS
+// - BARCODE_MAX_LEN
 
 // Barcode commands (expected decoded strings)
 typedef enum {

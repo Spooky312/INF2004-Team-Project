@@ -8,18 +8,14 @@
 
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "robot_config.h"
 
-// ---- Public configuration ----
-#define IMU_I2C           i2c0
-#define IMU_I2C_SDA       4         // GP4  (adjust if wired differently)
-#define IMU_I2C_SCL       5         // GP5
-#define IMU_I2C_BAUD_HZ   400000
-
-// Magnetic declination in radians (set for your location; 0 for demo)
-#define IMU_DECLINATION_RAD  0.0f
-
-// Filter alpha in [0..1]; lower is smoother
-#define IMU_HEADING_EMA_ALPHA  0.15f
+// Configuration now in robot_config.h:
+// - IMU_I2C_INST (i2c0)
+// - IMU_I2C_SDA, IMU_I2C_SCL
+// - IMU_I2C_BAUD_HZ
+// - IMU_DECLINATION_RAD
+// - IMU_HEADING_EMA_ALPHA
 
 // ---- Public API ----
 void  imu_init(void);

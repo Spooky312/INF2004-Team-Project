@@ -9,9 +9,9 @@ static uint16_t threshold = LINE_THRESHOLD;
 
 void line_sensor_init(void) {
     adc_init();
-    adc_gpio_init(LINE_ADC_PIN);
+    adc_gpio_init(LINE_IR_AO_PIN);
     adc_select_input(LINE_ADC_INPUT);
-    printf("[LINE_SENSOR] Initialized on GPIO %d (ADC%d)\n", LINE_ADC_PIN, LINE_ADC_INPUT);
+    printf("[LINE_SENSOR] Initialized on GPIO %d (ADC%d)\n", LINE_IR_AO_PIN, LINE_ADC_INPUT);
 }
 
 line_state_t line_sensor_read(void) {

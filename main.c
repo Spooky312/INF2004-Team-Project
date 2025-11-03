@@ -10,27 +10,24 @@
 #include "task.h"
 #include "semphr.h"
 
+// Centralized configuration
+#include "robot_config.h"
+
 // Hardware drivers
-#include "drivers/motor/motor.h"
-#include "drivers/encoder/encoder.h"
-#include "drivers/imu/imu.h"
-#include "drivers/pid/pid.h"
-#include "drivers/line_sensor/line_sensor.h"
-#include "drivers/barcode/barcode.h"
-#include "drivers/state_machine/state_machine.h"
+#include "src/motor/motor.h"
+#include "src/encoder/encoder.h"
+#include "src/imu/imu.h"
+#include "src/pid/pid.h"
+#include "src/line_sensor/line_sensor.h"
+#include "src/barcode/barcode.h"
+#include "src/state_machine/state_machine.h"
 
-// ===== Configuration =====
-#define BASE_SPEED 0.5f         // Base speed for line following
-#define TURN_SPEED 0.20f        // Speed during 90° turns
-#define TURN_ANGLE_DEG 90.0f    // Target angle for turns
-#define TURN_TOLERANCE_DEG 5.0f // Acceptable angle error
-
-#define EMERGENCY_STOP_PIN 20 // GP20 for emergency stop button
-
-#define LINE_FOLLOW_TASK_PRIORITY (tskIDLE_PRIORITY + 2)
-#define BARCODE_TASK_PRIORITY (tskIDLE_PRIORITY + 2)
-#define TELEMETRY_TASK_PRIORITY (tskIDLE_PRIORITY + 1)
-#define TURN_TASK_PRIORITY (tskIDLE_PRIORITY + 3)
+// All configuration now in robot_config.h:
+// - BASE_SPEED, TURN_SPEED
+// - TURN_ANGLE_DEG, TURN_TOLERANCE_DEG
+// - EMERGENCY_STOP_PIN
+// - Task priorities and stack sizes
+// - Timing parameters
 
 // ===== Global state =====
 static SemaphoreHandle_t state_mutex;
@@ -57,8 +54,8 @@ void gpio_interrupt_router(uint gpio, uint32_t events)
         }
         printf("\n!!! EMERGENCY STOP TRIGGERED (GP20) !!!\n");
     }
-    else if (gpio == 3 || gpio == 26) {
-        // Route to encoder handler (GP3 = left, GP26 = right)
+    else if (gpio == 3 || gpio == 6) {
+        // Route to encoder handler (GP3 = left, GP6 = right)
         encoder_irq_handler(gpio, events);
     }
 }
@@ -141,7 +138,7 @@ void barcode_scan_task(void *params)
         // The actual barcode scanning happens in timer interrupt
         barcode_update();
         
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz polling
+        vTaskDelay(pdMS_TO_TICKS(BARCODE_UPDATE_RATE_MS)); // 100Hz polling
     }
 }
 
@@ -172,7 +169,6 @@ void turn_task(void *params)
 
     // Execute turn with IMU feedback
     uint32_t turn_start = to_ms_since_boot(get_absolute_time());
-    uint32_t timeout_ms = 5000; // 5 second timeout
 
     while (1)
     {
@@ -197,7 +193,7 @@ void turn_task(void *params)
         }
 
         // Check timeout
-        if (to_ms_since_boot(get_absolute_time()) - turn_start > timeout_ms)
+        if (to_ms_since_boot(get_absolute_time()) - turn_start > TURN_TIMEOUT_MS)
         {
             printf("[TURN_TASK] Turn timeout!\n");
             motor_stop();
@@ -251,9 +247,7 @@ void line_follow_task(void *params)
     } search_direction_t;
 
     search_direction_t last_turn = SEARCH_NONE;
-    float search_intensity = 0.4f; // How hard to turn while searching
     uint32_t recovery_count = 0;   // Counter for recovery stabilization
-    const uint32_t RECOVERY_CYCLES = 15; // Stabilize for 15 cycles (150ms) after finding line
     bool was_off_track = false;    // Track if we were just off the line
 
     // Barcode mode variables
@@ -261,8 +255,6 @@ void line_follow_task(void *params)
     float barcode_reference_heading = 0.0f;
     uint32_t time_on_line_start = 0;
     uint32_t barcode_mode_start_time = 0;
-    const uint32_t BARCODE_ENABLE_TIME_MS = 500;
-    const uint32_t BARCODE_TIMEOUT_MS = 2000;
 
     while (1)
     {
@@ -292,7 +284,6 @@ void line_follow_task(void *params)
         {
             was_off_track = false;
             last_turn = SEARCH_NONE;
-            search_intensity = 0.4f;
             recovery_count = 0;
             barcode_scanning_active = false;
             time_on_line_start = 0;
@@ -395,7 +386,6 @@ void line_follow_task(void *params)
                 // **NORMAL MODE: Go straight, reset all counters (original behavior)**
                 was_off_track = false;
                 recovery_count = 0;
-                search_intensity = 0.4f;
                 last_turn = SEARCH_NONE;
 
                 left_cmd = BASE_SPEED;
@@ -426,12 +416,11 @@ void line_follow_task(void *params)
             }
 
             // SEARCH PATTERN: Always turn RIGHT (robot veers left, so search right)
-            search_intensity = 0.4f; // Reduced intensity for gentler turn
             last_turn = SEARCH_RIGHT; // Track that we're searching right
 
             // Always search right (veer right) - left wheel faster, right wheel slower
             float left_speed = BASE_SPEED;
-            float right_speed = BASE_SPEED - search_intensity;  // 0.5 - 0.4 = 0.1
+            float right_speed = BASE_SPEED - SEARCH_INTENSITY;  // 0.5 - 0.4 = 0.1
 
             motor_set_speed(left_speed, right_speed);
 
@@ -443,7 +432,7 @@ void line_follow_task(void *params)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz update - faster for narrow 1.5cm line
+        vTaskDelay(pdMS_TO_TICKS(LINE_FOLLOW_UPDATE_RATE_MS)); // 100Hz update - faster for narrow 1.5cm line
     }
 }
 
@@ -528,7 +517,7 @@ void telemetry_task(void *params)
 
     while (1)
     {
-        vTaskDelay(pdMS_TO_TICKS(200)); // 5Hz
+        vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_RATE_MS)); // 5Hz
 
         const robot_context_t *ctx;
         robot_state_t state;
@@ -596,20 +585,20 @@ int main()
     gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL, 
                                        true, &gpio_interrupt_router);
     gpio_set_irq_enabled(3, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_enabled(26, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(6, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
     
-    printf("[INIT] Interrupts enabled: GP3 (left), GP26 (right), GP20 (e-stop)\n");
+    printf("[INIT] Interrupts enabled: GP3 (left enc), GP6 (right enc), GP20 (e-stop)\n");
 
     barcode_set_callback(on_barcode_detected);
     state_mutex = xSemaphoreCreateMutex();
 
     printf("[INIT] Creating FreeRTOS tasks...\n");
 
-    xTaskCreate(line_follow_task, "LineFollow", 2048, NULL,
+    xTaskCreate(line_follow_task, "LineFollow", LINE_FOLLOW_STACK_SIZE, NULL,
                 LINE_FOLLOW_TASK_PRIORITY, NULL);
-    xTaskCreate(state_monitor_task, "StateMonitor", 2048, NULL,
-                BARCODE_TASK_PRIORITY, NULL);
-    xTaskCreate(telemetry_task, "Telemetry", 2048, NULL,
+    xTaskCreate(state_monitor_task, "StateMonitor", STATE_MONITOR_STACK_SIZE, NULL,
+                STATE_MONITOR_PRIORITY, NULL);
+    xTaskCreate(telemetry_task, "Telemetry", TELEMETRY_STACK_SIZE, NULL,
                 TELEMETRY_TASK_PRIORITY, NULL);
 
     printf("[INIT] Starting barcode scanner...\n");

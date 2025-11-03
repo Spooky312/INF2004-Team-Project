@@ -7,12 +7,13 @@
 
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
+#include "robot_config.h"
 
-// Configuration
-#define LINE_ADC_PIN        27
-#define LINE_ADC_INPUT      1     // GPIO 27 = ADC1 (not ADC0!)
-#define LINE_THRESHOLD      2000  // Midpoint: white ~0-100, black ~4000-4095
-#define LINE_SAMPLE_COUNT   8     // Averaging samples
+// Configuration now in robot_config.h:
+// - LINE_IR_AO_PIN (GPIO 27)
+// - LINE_ADC_INPUT (ADC1)
+// - LINE_THRESHOLD
+// - LINE_SAMPLE_COUNT
 
 // Line state
 typedef enum {

@@ -5,10 +5,12 @@
 #ifndef ENCODER_H
 #define ENCODER_H
 
-#define ENCODER_LEFT_PIN   3
-#define ENCODER_RIGHT_PIN  26
-
 #include "pico/stdlib.h"
+#include "robot_config.h"
+
+// Pin definitions now in robot_config.h:
+// - ENCODER_LEFT_PIN
+// - ENCODER_RIGHT_PIN
 
 void encoder_init(void);
 float encoder_get_rpm_left(void);
