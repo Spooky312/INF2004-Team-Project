@@ -160,19 +160,33 @@ bool imu_get_heading_deg(float *heading_raw_deg, float *heading_filt_deg)
     // Heading in radians, add declination
     float heading = atan2f(-my_comp, mx_comp) + IMU_DECLINATION_RAD;
 
-    // Normalize to [0, 2π)
-    if (heading < 0) heading += 2.0f * (float)M_PI;
-    if (heading >= 2.0f * (float)M_PI) heading -= 2.0f * (float)M_PI;
-
+    // Normalize to [-π, π), then convert to degrees and shift to [0, 360)
+    while (heading > (float)M_PI) heading -= 2.0f * (float)M_PI;
+    while (heading < -(float)M_PI) heading += 2.0f * (float)M_PI;
+    
     float heading_deg = heading * 180.0f / (float)M_PI;
+    
+    // Shift to [0, 360) range
+    if (heading_deg < 0) heading_deg += 360.0f;
 
-    // EMA filter
+    // EMA filter with proper angle wrapping
     if (!ema_inited) {
         ema_heading_deg = heading_deg;
         ema_inited = true;
     } else {
-        ema_heading_deg = (IMU_HEADING_EMA_ALPHA * heading_deg)
-                        + (1.0f - IMU_HEADING_EMA_ALPHA) * ema_heading_deg;
+        // Handle angle wrapping for EMA
+        float delta = heading_deg - ema_heading_deg;
+        
+        // Normalize delta to [-180, 180]
+        while (delta > 180.0f) delta -= 360.0f;
+        while (delta < -180.0f) delta += 360.0f;
+        
+        // Apply EMA on the delta
+        ema_heading_deg += IMU_HEADING_EMA_ALPHA * delta;
+        
+        // Normalize result to [0, 360)
+        while (ema_heading_deg >= 360.0f) ema_heading_deg -= 360.0f;
+        while (ema_heading_deg < 0.0f) ema_heading_deg += 360.0f;
     }
 
     if (heading_raw_deg)  *heading_raw_deg  = heading_deg;
