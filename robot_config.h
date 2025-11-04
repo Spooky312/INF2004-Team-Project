@@ -92,7 +92,12 @@
 // ROBOT BEHAVIOR CONFIGURATION
 // ============================================================================
 // Movement speeds (0.0 to 1.0)
-#define BASE_SPEED          0.5f    // Base speed for line following
+#define BASE_SPEED          0.6f    // Base speed increased to 60% for more stable encoder readings
+
+// Dynamic motor bias compensation parameters
+#define BIAS_LEARNING_RATE  0.08f   // How fast to adapt bias (increased from 0.05 for faster learning)
+#define BIAS_MAX_ADJUSTMENT 0.30f   // Maximum bias adjustment (increased from 0.25 to ±30%)
+
 #define TURN_SPEED          0.20f   // Speed during 90° turns
 
 // Turn parameters

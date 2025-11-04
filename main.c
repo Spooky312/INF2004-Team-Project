@@ -234,9 +234,178 @@ void turn_task(void *params)
 }
 
 // ===== Line following task =====
+// **PID TEST MODE**: Just go straight using encoder-based PID with dynamic bias learning
+// Strategy:
+//   - No line sensor logic - just pure encoder speed matching
+//   - Use encoder RPM feedback to match wheel speeds (go straight)
+//   - Dynamically learn motor bias to compensate for mechanical differences
 void line_follow_task(void *params)
 {
-    printf("[LINE_FOLLOW] Task started\n");
+    printf("[LINE_FOLLOW] Task started - PID TEST MODE with DYNAMIC BIAS LEARNING\n");
+    printf("[PID_TEST] Press emergency stop (GP20) to halt\n");
+
+    // Reset PID state (includes bias learning reset)
+    pid_init();
+
+    uint32_t debug_counter = 0;
+    
+    // Print PID configuration at startup
+    printf("\n========== PID CALIBRATION TEST ==========\n");
+    printf("Base Speed: %.2f\n", BASE_SPEED);
+    printf("Dynamic Bias Learning: ENABLED\n");
+    printf("  Learning Rate: %.3f\n", BIAS_LEARNING_RATE);
+    printf("  Max Adjustment: ±%.2f (±%.0f%%)\n", BIAS_MAX_ADJUSTMENT, BIAS_MAX_ADJUSTMENT * 100);
+    printf("PID Gains: Kp=%.2f Ki=%.3f Kd=%.2f\n", PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING);
+    printf("PID Scale: %.4f | Max Correction: 0.12\n", 0.008f);
+    printf("Deadband: 3.0 RPM\n");
+    printf("==========================================\n\n");
+
+    while (1)
+    {
+        // Check emergency stop
+        if (emergency_stop_triggered)
+        {
+            motor_stop();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        robot_state_t state;
+
+        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+        {
+            state = state_machine_get_state();
+            xSemaphoreGive(state_mutex);
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        // Only run in LINE_FOLLOWING state
+        if (state != STATE_LINE_FOLLOWING)
+        {
+            pid_init();  // Resets PID and bias learning
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        // **PID TEST: Go straight using encoder-based speed matching with dynamic bias**
+        // Read current wheel speeds
+        float left_rpm = encoder_get_rpm_left();
+        float right_rpm = encoder_get_rpm_right();
+        
+        // Calculate average speed and speed difference
+        float avg_rpm = (left_rpm + right_rpm) / 2.0f;
+        float speed_error = left_rpm - right_rpm;
+        float speed_error_raw = speed_error;  // Store before deadband
+        
+        // === DYNAMIC BIAS LEARNING (handled by PID module) ===
+        // Update bias learning with current speed error
+        pid_update_bias(speed_error_raw);
+        
+        // Get the current motor bias adjustment
+        float motor_bias_adjustment = pid_get_bias_adjustment();
+        
+        // Apply larger deadband for noisy low-speed encoders
+        if (fabs(speed_error) < 3.0f)  // 3 RPM deadband
+        {
+            speed_error = 0.0f;
+        }
+        
+        // Use PID to compute correction based on speed difference
+        float pid_output = pid_compute_heading(speed_error);
+        
+        // Scale PID output to motor correction range
+        const float PID_TO_MOTOR_SCALE = 0.008f;
+        float speed_correction = pid_output * PID_TO_MOTOR_SCALE;
+        float speed_correction_raw = speed_correction;  // Store before clamping
+        
+        // Limit correction to prevent extreme motor speeds
+        const float MAX_SPEED_CORRECTION = 0.12f;
+        if (speed_correction > MAX_SPEED_CORRECTION) speed_correction = MAX_SPEED_CORRECTION;
+        if (speed_correction < -MAX_SPEED_CORRECTION) speed_correction = -MAX_SPEED_CORRECTION;
+        
+        // Apply correction to equalize wheel speeds
+        // If left wheel is faster (positive error), slow it down and speed up right
+        float left_cmd = BASE_SPEED - speed_correction;
+        float right_cmd = BASE_SPEED + speed_correction;
+        
+        // Apply dynamic bias to compensate for mechanical differences
+        // Bias is applied asymmetrically: reduce stronger motor, boost weaker motor
+        left_cmd -= motor_bias_adjustment;   // If left is faster (positive bias), reduce it
+        right_cmd += motor_bias_adjustment;  // Compensate by increasing right
+        
+        // Ensure commands stay within valid range [0, 1.0]
+        if (left_cmd < 0.0f) left_cmd = 0.0f;
+        if (left_cmd > 1.0f) left_cmd = 1.0f;
+        if (right_cmd < 0.0f) right_cmd = 0.0f;
+        if (right_cmd > 1.0f) right_cmd = 1.0f;
+        
+        // Calculate actual motor power percentages
+        float left_power_pct = left_cmd * 100.0f;
+        float right_power_pct = right_cmd * 100.0f;
+
+        motor_set_speed(left_cmd, right_cmd);
+
+        // Enhanced debug output every 200ms for easier reading
+        debug_counter++;
+        if (debug_counter >= 20)  // 20 * 10ms = 200ms
+        {
+            // Get bias statistics from PID module
+            float bias_integral;
+            uint32_t samples_collected;
+            pid_get_bias_stats(&bias_integral, &samples_collected);
+            
+            printf("\n┌─────────────────────────────────────────────────────────────────────┐\n");
+            printf("│ ENCODER FEEDBACK                                                    │\n");
+            printf("│   Left RPM:     %6.1f    Right RPM:    %6.1f    Avg: %6.1f   │\n", 
+                   left_rpm, right_rpm, avg_rpm);
+            printf("│   Speed Error:  %+6.1f RPM  (Raw: %+6.1f before deadband)        │\n", 
+                   speed_error, speed_error_raw);
+            printf("├─────────────────────────────────────────────────────────────────────┤\n");
+            printf("│ DYNAMIC BIAS LEARNING (Samples: %5lu)                             │\n", 
+                   samples_collected);
+            printf("│   Bias Integral:%+7.2f RPM  (Long-term average drift)            │\n", 
+                   bias_integral);
+            printf("│   Motor Bias:   %+7.4f  (Applied adjustment to motors)           │\n", 
+                   motor_bias_adjustment);
+            printf("├─────────────────────────────────────────────────────────────────────┤\n");
+            printf("│ PID CALCULATION                                                     │\n");
+            printf("│   PID Output:   %+7.3f  (Kp=%.2f Ki=%.3f Kd=%.2f)                │\n", 
+                   pid_output, PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING);
+            printf("│   Scaled Corr:  %+7.4f  (Raw: %+7.4f before clamp)              │\n", 
+                   speed_correction, speed_correction_raw);
+            printf("├─────────────────────────────────────────────────────────────────────┤\n");
+            printf("│ MOTOR COMMANDS                                                      │\n");
+            printf("│   Left Motor:   %.3f  (%5.1f%%)    [BASE %.2f - CORR %+.3f]     │\n", 
+                   left_cmd, left_power_pct, BASE_SPEED, speed_correction);
+            printf("│   Right Motor:  %.3f  (%5.1f%%)    [BASE %.2f + CORR %+.3f]     │\n", 
+                   right_cmd, right_power_pct, BASE_SPEED, speed_correction);
+            printf("│   Power Diff:   %+5.1f%%                                            │\n", 
+                   left_power_pct - right_power_pct);
+            printf("└─────────────────────────────────────────────────────────────────────┘\n");
+            debug_counter = 0;
+        }
+
+        // Update state machine context
+        float distance = encoder_get_distance_m();
+        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+        {
+            state_machine_update_context(left_cmd, right_cmd, distance, 0.0f, true);
+            xSemaphoreGive(state_mutex);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz update
+    }
+}
+
+/*
+// ===== ORIGINAL LINE FOLLOWING LOGIC (COMMENTED OUT FOR PID TESTING) =====
+void line_follow_task(void *params)
+{
+    printf("[LINE_FOLLOW] Task started (single sensor + encoder PID)\n");
 
     // Single-sensor line following variables (from original)
     typedef enum
@@ -252,7 +421,6 @@ void line_follow_task(void *params)
 
     // Barcode mode variables
     volatile bool barcode_scanning_active = false;
-    float barcode_reference_heading = 0.0f;
     uint32_t time_on_line_start = 0;
     uint32_t barcode_mode_start_time = 0;
 
@@ -294,8 +462,6 @@ void line_follow_task(void *params)
 
         // Read sensors
         line_state_t line_state = line_sensor_read();
-        float current_heading_raw, current_heading;
-        imu_get_heading_deg(&current_heading_raw, &current_heading);
         uint32_t now = to_ms_since_boot(get_absolute_time());
 
         // Check if on line
@@ -316,9 +482,8 @@ void line_follow_task(void *params)
             {
                 barcode_scanning_active = true;
                 barcode_mode_start_time = now;
-                barcode_reference_heading = current_heading;
                 pid_init(); // Reset PID for barcode mode
-                printf("[LINE_FOLLOW] Barcode scan mode ON (heading: %.1f°)\n", barcode_reference_heading);
+                printf("[LINE_FOLLOW] Barcode scan mode ON\n");
             }
             
             // Check barcode timeout
@@ -337,30 +502,37 @@ void line_follow_task(void *params)
             
             if (barcode_scanning_active)
             {
-                // **BARCODE MODE: Go perfectly straight using IMU + PID**
-                float heading_error = barcode_reference_heading - current_heading;
+                // **BARCODE MODE: Go perfectly straight using encoder-based speed matching**
+                // Read current wheel speeds
+                float left_rpm = encoder_get_rpm_left();
+                float right_rpm = encoder_get_rpm_right();
                 
-                // Normalize error to [-180, 180]
-                while (heading_error > 180.0f) heading_error -= 360.0f;
-                while (heading_error < -180.0f) heading_error += 360.0f;
+                // Calculate speed difference (positive = left wheel faster)
+                float speed_error = left_rpm - right_rpm;
                 
-                // Apply deadband
-                if (fabs(heading_error) < 1.5f)
+                // Apply deadband to avoid overcorrection
+                if (fabs(speed_error) < 5.0f)  // 5 RPM deadband
                 {
-                    heading_error = 0.0f;
+                    speed_error = 0.0f;
                 }
                 
-                // Use PID to compute correction
-                float heading_correction = pid_compute_heading(heading_error);
+                // Use PID to compute correction based on speed difference
+                float pid_output = pid_compute_heading(speed_error);
                 
-                // Limit correction
-                const float MAX_HEADING_CORRECTION = 0.20f;
-                if (heading_correction > MAX_HEADING_CORRECTION) heading_correction = MAX_HEADING_CORRECTION;
-                if (heading_correction < -MAX_HEADING_CORRECTION) heading_correction = -MAX_HEADING_CORRECTION;
+                // Scale PID output to motor correction range
+                // Speed error is in RPM units, scale appropriately
+                const float PID_TO_MOTOR_SCALE = 0.005f;  // Tunable scaling factor
+                float speed_correction = pid_output * PID_TO_MOTOR_SCALE;
                 
-                // Apply correction to maintain straight heading
-                left_cmd = BASE_SPEED - heading_correction;
-                right_cmd = BASE_SPEED + heading_correction;
+                // Limit correction to prevent extreme motor speeds
+                const float MAX_SPEED_CORRECTION = 0.15f;
+                if (speed_correction > MAX_SPEED_CORRECTION) speed_correction = MAX_SPEED_CORRECTION;
+                if (speed_correction < -MAX_SPEED_CORRECTION) speed_correction = -MAX_SPEED_CORRECTION;
+                
+                // Apply correction to equalize wheel speeds
+                // If left wheel is faster (positive error), slow it down and speed up right
+                left_cmd = BASE_SPEED - speed_correction;
+                right_cmd = BASE_SPEED + speed_correction;
             }
             else if (was_off_track && recovery_count < RECOVERY_CYCLES)
             {
@@ -435,6 +607,7 @@ void line_follow_task(void *params)
         vTaskDelay(pdMS_TO_TICKS(LINE_FOLLOW_UPDATE_RATE_MS)); // 100Hz update - faster for narrow 1.5cm line
     }
 }
+*/
 
 // ===== State monitor task =====
 void state_monitor_task(void *params)
