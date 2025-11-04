@@ -234,36 +234,22 @@ void turn_task(void *params)
 }
 
 // ===== Line following task =====
-// **PID TEST MODE**: Just go straight using encoder-based PID with dynamic bias learning
 // Strategy:
-//   - No line sensor logic - just pure encoder speed matching
-//   - Use encoder RPM feedback to match wheel speeds (go straight)
-//   - Dynamically learn motor bias to compensate for mechanical differences
+//   - When ON line: Use encoder-based PID to go perfectly straight
+//   - When OFF line: Search LEFT (left-side biased) to find the line again
+//   - Base speed: 0.4 (40%)
 void line_follow_task(void *params)
 {
-    printf("[LINE_FOLLOW] Task started - ENCODER-BASED SPEED MATCHING\n");
-    printf("[PID_TEST] Press emergency stop (GP20) to halt\n");
+    printf("[LINE_FOLLOW] Task started - LINE SENSOR + ENCODER PID\n");
+    printf("[LINE_FOLLOW] Base Speed: 0.4 | Search: LEFT-BIASED\n");
 
     // Reset PID state
     pid_init();
 
     uint32_t debug_counter = 0;
+    const float SEARCH_SPEED = 0.4f;  // Base speed for searching
+    const float SEARCH_TURN_RATE = 0.2f;  // How much to reduce right wheel when searching left
     
-    // Print PID configuration at startup
-    printf("\n========== ENCODER-BASED SPEED MATCHING ==========\n");
-    printf("Base Speed: %.2f (%.0f%%)\n", BASE_SPEED, BASE_SPEED * 100);
-    printf("Control Strategy: Pure PID with integral feedforward\n");
-    printf("  - Target: Left RPM = Right RPM (equal speed = straight)\n");
-    printf("  - P term: Instant response to current speed error\n");
-    printf("  - I term: Accumulates to compensate motor voltage curve differences\n");
-    printf("  - D term: Dampens oscillations and overshoots\n");
-    printf("  - Integral becomes PERMANENT feedforward after convergence\n");
-    printf("PID Gains: Kp=%.2f Ki=%.3f Kd=%.2f\n", PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING);
-    printf("Integral Max: %.0f (prevents windup)\n", PID_HEADING_I_MAX);
-    printf("PID Scale: %.3f (converts PID output to motor correction)\n", 0.015f);
-    printf("RPM Filter: Alpha=%.2f | Deadband: 1.0 RPM\n", 0.3f);
-    printf("==================================================\n\n");
-
     while (1)
     {
         // Check emergency stop
@@ -290,97 +276,99 @@ void line_follow_task(void *params)
         // Only run in LINE_FOLLOWING state
         if (state != STATE_LINE_FOLLOWING)
         {
-            pid_init();  // Resets PID and bias learning
+            pid_init();  // Reset PID
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
-        // **ENCODER-BASED SPEED MATCHING: Use RPM feedback to equalize wheel speeds**
-        // Read current wheel speeds
-        float left_rpm = encoder_get_rpm_left();
-        float right_rpm = encoder_get_rpm_right();
-        
-        // Apply EMA filter to reduce encoder noise
-        static float left_rpm_filtered = 0.0f;
-        static float right_rpm_filtered = 0.0f;
-        const float ALPHA = 0.3f;  // Filter coefficient (lower = more smoothing)
-        left_rpm_filtered = left_rpm_filtered * (1.0f - ALPHA) + left_rpm * ALPHA;
-        right_rpm_filtered = right_rpm_filtered * (1.0f - ALPHA) + right_rpm * ALPHA;
-        
-        // Calculate average speed and speed difference
-        float avg_rpm = (left_rpm_filtered + right_rpm_filtered) / 2.0f;
-        float speed_error = left_rpm_filtered - right_rpm_filtered;
-        float speed_error_raw = speed_error;  // Store before deadband
-        
-        // Apply 1.0 RPM deadband to ignore encoder noise
-        if (fabs(speed_error) < 1.0f)
+        // Read line sensor
+        line_state_t line_state = line_sensor_read();
+        float left_cmd, right_cmd;
+        bool on_line = false;
+
+        if (line_state == LINE_BLACK)
         {
-            speed_error = 0.0f;
+            // ===== ON LINE: Slowly drift right while maintaining forward motion =====
+            on_line = true;
+            
+            // Apply a slight right bias: left wheel slightly faster than right
+            const float RIGHT_DRIFT_BIAS = 0.05f;  // Adjust this value to control drift rate (0.05 = 5% difference)
+            
+            // Read current wheel speeds
+            float left_rpm = encoder_get_rpm_left();
+            float right_rpm = encoder_get_rpm_right();
+            
+            // Apply EMA filter to reduce encoder noise
+            static float left_rpm_filtered = 0.0f;
+            static float right_rpm_filtered = 0.0f;
+            const float ALPHA = 0.3f;  // Filter coefficient (lower = more smoothing)
+            left_rpm_filtered = left_rpm_filtered * (1.0f - ALPHA) + left_rpm * ALPHA;
+            right_rpm_filtered = right_rpm_filtered * (1.0f - ALPHA) + right_rpm * ALPHA;
+            
+            // Calculate speed difference
+            float speed_error = left_rpm_filtered - right_rpm_filtered;
+            float speed_error_raw = speed_error;
+            
+            // Apply 1.0 RPM deadband to ignore encoder noise
+            if (fabs(speed_error) < 1.0f)
+            {
+                speed_error = 0.0f;
+            }
+            
+            // PID computes correction
+            float pid_output = pid_compute_heading(speed_error);
+            
+            // Scale PID output to motor correction range
+            const float PID_TO_MOTOR_SCALE = 0.015f;
+            float speed_correction = pid_output * PID_TO_MOTOR_SCALE;
+            
+            // Apply correction to equalize wheel speeds, THEN add right drift bias
+            left_cmd = BASE_SPEED - speed_correction + RIGHT_DRIFT_BIAS;  // Left wheel faster
+            right_cmd = BASE_SPEED + speed_correction - RIGHT_DRIFT_BIAS;  // Right wheel slower
+            
+            // Ensure commands stay within valid range [0, 1.0]
+            if (left_cmd < 0.0f) left_cmd = 0.0f;
+            if (left_cmd > 1.0f) left_cmd = 1.0f;
+            if (right_cmd < 0.0f) right_cmd = 0.0f;
+            if (right_cmd > 1.0f) right_cmd = 1.0f;
+
+            // Debug output every 200ms
+            debug_counter++;
+            if (debug_counter >= 20)  // 20 * 10ms = 200ms
+            {
+                float integral = pid_get_heading_integral();
+                printf("[ON LINE] L:%.1f R:%.1f RPM | Err:%+.1f | PID:%+.3f | Motors: L:%.3f R:%.3f | I:%+.2f\n",
+                       left_rpm_filtered, right_rpm_filtered, speed_error_raw, 
+                       pid_output, left_cmd, right_cmd, integral);
+                debug_counter = 0;
+            }
         }
-        
-        // PID computes correction - integral naturally accumulates to compensate voltage curves
-        float pid_output = pid_compute_heading(speed_error);
-        
-        // Scale PID output to motor correction range
-        const float PID_TO_MOTOR_SCALE = 0.015f;
-        float speed_correction = pid_output * PID_TO_MOTOR_SCALE;
-        
-        // Apply correction to equalize wheel speeds
-        // If left wheel is faster (positive error), slow it down and speed up right
-        float left_cmd = BASE_SPEED - speed_correction;
-        float right_cmd = BASE_SPEED + speed_correction;
-        
-        // Ensure commands stay within valid range [0, 1.0]
-        if (left_cmd < 0.0f) left_cmd = 0.0f;
-        if (left_cmd > 1.0f) left_cmd = 1.0f;
-        if (right_cmd < 0.0f) right_cmd = 0.0f;
-        if (right_cmd > 1.0f) right_cmd = 1.0f;
-        
-        // Calculate actual motor power percentages and difference
-        float left_power_pct = left_cmd * 100.0f;
-        float right_power_pct = right_cmd * 100.0f;
-        float power_diff_pct = left_power_pct - right_power_pct;
+        else
+        {
+            // ===== OFF LINE: Search LEFT (left-side biased) =====
+            on_line = false;
+            pid_init();  // Reset PID when off line
+            
+            // Turn left: left wheel slower, right wheel normal
+            left_cmd = SEARCH_SPEED - SEARCH_TURN_RATE;  // 0.4 - 0.2 = 0.2
+            right_cmd = SEARCH_SPEED;                     // 0.4
+            
+            debug_counter++;
+            if (debug_counter >= 20)
+            {
+                printf("[OFF LINE] Searching LEFT | Motors: L:%.3f R:%.3f\n", 
+                       left_cmd, right_cmd);
+                debug_counter = 0;
+            }
+        }
 
         motor_set_speed(left_cmd, right_cmd);
-
-        // Enhanced debug output every 200ms for easier reading
-        debug_counter++;
-        if (debug_counter >= 20)  // 20 * 10ms = 200ms
-        {
-            // Get PID integral value (this IS the learned feedforward compensation)
-            float integral = pid_get_heading_integral();
-            
-            printf("\n┌─────────────────────────────────────────────────────────────────────┐\n");
-            printf("│ ENCODER FEEDBACK                                                    │\n");
-            printf("│   Left RPM:     %6.1f    Right RPM:    %6.1f    Avg: %6.1f   │\n", 
-                   left_rpm_filtered, right_rpm_filtered, avg_rpm);
-            printf("│   Speed Error:  %+6.1f RPM  (Raw: %+6.1f before %.1f deadband)    │\n", 
-                   speed_error, speed_error_raw, 1.0f);
-            printf("├─────────────────────────────────────────────────────────────────────┤\n");
-            printf("│ PID CONTROL (Integral = Feedforward Compensation)                  │\n");
-            printf("│   PID Output:  %+7.3f  (Kp=%.2f Ki=%.3f Kd=%.2f)                │\n", 
-                   pid_output, PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING);
-            printf("│   Integral:    %+7.2f  (learned motor voltage curve diff)       │\n", 
-                   integral);
-            printf("│   Scaled Corr: %+7.4f  (applied to motors, scale=%.3f)           │\n", 
-                   speed_correction, PID_TO_MOTOR_SCALE);
-            printf("├─────────────────────────────────────────────────────────────────────┤\n");
-            printf("│ MOTOR COMMANDS                                                      │\n");
-            printf("│   Left Motor:   %.3f  (%5.1f%%)    [BASE %.2f - CORR %+.3f]     │\n",
-                   left_cmd, left_power_pct, BASE_SPEED, speed_correction);
-            printf("│   Right Motor:  %.3f  (%5.1f%%)    [BASE %.2f + CORR %+.3f]     │\n",
-                   right_cmd, right_power_pct, BASE_SPEED, speed_correction);
-            printf("│   Power Diff:  %+6.1f%%  (compensates for motor differences)       │\n", 
-                   power_diff_pct);
-            printf("└─────────────────────────────────────────────────────────────────────┘\n");
-            debug_counter = 0;
-        }
 
         // Update state machine context
         float distance = encoder_get_distance_m();
         if (xSemaphoreTake(state_mutex, portMAX_DELAY))
         {
-            state_machine_update_context(left_cmd, right_cmd, distance, 0.0f, true);
+            state_machine_update_context(left_cmd, right_cmd, distance, 0.0f, on_line);
             xSemaphoreGive(state_mutex);
         }
 
