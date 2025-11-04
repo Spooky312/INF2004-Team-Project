@@ -5,6 +5,7 @@
  */
 
 #include "barcode.h"
+#include "line_sensor.h"
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -444,6 +445,11 @@ bool barcode_get_result(barcode_result_t *result) {
     *result = last_result;
     new_result_available = false;
     return true;
+}
+
+const char* barcode_get_last_decoded(void) {
+    if (decoded_msg[0] == '\0') return NULL;
+    return decoded_msg;
 }
 
 void barcode_reset(void) {

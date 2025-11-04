@@ -71,7 +71,7 @@ motor_commands_t line_sensor_compute_motor_commands(void) {
     
     // Read line sensor
     line_state_t line_state = line_sensor_read();
-    
+
     // Compute target steering value based on sensor reading
     float steering_target;
     

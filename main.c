@@ -532,54 +532,53 @@ void state_monitor_task(void *params)
 }
 
 // ===== Telemetry task =====
-/*
-void telemetry_task(void *params)
-{
-    printf("[TELEMETRY] Task started\n");
 
-    uint32_t report_count = 0;
+// void telemetry_task(void *params)
+// {
+//     printf("[TELEMETRY] Task started\n");
 
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_RATE_MS)); // 5Hz
+//     uint32_t report_count = 0;
 
-        const robot_context_t *ctx;
-        robot_state_t state;
+//     while (1)
+//     {
+//         vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_RATE_MS)); // 5Hz
 
-        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-        {
-            ctx = state_machine_get_context();
-            state = ctx->current_state;
+//         const robot_context_t *ctx;
+//         robot_state_t state;
 
-            printf("\n----- Telemetry Report #%lu -----\n", ++report_count);
-            printf("State:         %s\n", state_machine_state_name(state));
-            printf("Line Error:    %.3f\n", ctx->line_error);
-            printf("Line Status:   %s\n", ctx->line_on_track ? "ON TRACK" : "OFF TRACK");
-            printf("Speed L/R:     %.2f / %.2f\n", ctx->current_speed_left, ctx->current_speed_right);
-            printf("RPM L/R:       %.0f / %.0f\n", encoder_get_rpm_left(), encoder_get_rpm_right());
-            printf("Distance:      %.2f m\n", ctx->distance_traveled_m);
-            printf("Last Barcode:  %s\n",
-                   ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : 
-                   ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT" :
-                   ctx->last_barcode_cmd == CMD_STOP ? "STOP" :
-                   ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD" : "NONE");
+//         if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+//         {
+//             ctx = state_machine_get_context();
+//             state = ctx->current_state;
 
-            uint16_t line_raw = line_sensor_read_raw();
-            float yaw_raw, yaw;
-            imu_get_heading_deg(&yaw_raw, &yaw);
-            const char* last_barcode = barcode_get_last_decoded();
-            printf("Raw Line ADC:  %u\n", line_raw);
-            printf("IMU Yaw:       %.1f°\n", yaw);
-            printf("Last Barcode:  \"%s\" (Total: %lu)\n", 
-                   last_barcode ? last_barcode : "none", total_barcodes_detected);
-            printf("Barcode Mode:  %s\n", barcode_scanning_active ? "ACTIVE" : "OFF");
-            printf("-----------------------------\n\n");
+//             printf("\n----- Telemetry Report #%lu -----\n", ++report_count);
+//             printf("State:         %s\n", state_machine_state_name(state));
+//             printf("Line Error:    %.3f\n", ctx->line_error);
+//             printf("Line Status:   %s\n", ctx->line_on_track ? "ON TRACK" : "OFF TRACK");
+//             printf("Speed L/R:     %.2f / %.2f\n", ctx->current_speed_left, ctx->current_speed_right);
+//             printf("RPM L/R:       %.0f / %.0f\n", encoder_get_rpm_left(), encoder_get_rpm_right());
+//             printf("Distance:      %.2f m\n", ctx->distance_traveled_m);
+//             printf("Last Barcode:  %s\n",
+//                    ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : 
+//                    ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT" :
+//                    ctx->last_barcode_cmd == CMD_STOP ? "STOP" :
+//                    ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD" : "NONE");
 
-            xSemaphoreGive(state_mutex);
-        }
-    }
-}
-*/
+//             uint16_t line_raw = line_sensor_read_raw();
+//             float yaw_raw, yaw;
+//             imu_get_heading_deg(&yaw_raw, &yaw);
+//             const char* last_barcode = barcode_get_last_decoded();
+//             printf("Raw Line ADC:  %u\n", line_raw);
+//             printf("IMU Yaw:       %.1f°\n", yaw);
+//             printf("Last Barcode:  \"%s\" (Total: %lu)\n", 
+//                    last_barcode ? last_barcode : "none", total_barcodes_detected);
+//             printf("Barcode Scan:  ACTIVE\n");  // Always active after startup
+//             printf("-----------------------------\n\n");
+
+//             xSemaphoreGive(state_mutex);
+//         }
+//     }
+// }
 
 // ===== Main =====
 int main()
@@ -627,7 +626,6 @@ int main()
                 LINE_FOLLOW_TASK_PRIORITY, NULL);  // Same priority as line follow
     xTaskCreate(state_monitor_task, "StateMonitor", STATE_MONITOR_STACK_SIZE, NULL,
                 STATE_MONITOR_PRIORITY, NULL);
-    // Telemetry task commented out for barcode debugging
     // xTaskCreate(telemetry_task, "Telemetry", TELEMETRY_STACK_SIZE, NULL,
     //             TELEMETRY_TASK_PRIORITY, NULL);
 

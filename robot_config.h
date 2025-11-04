@@ -84,18 +84,18 @@
 #define PID_SPEED_I_MAX     200.0f  // Anti-windup limit
 
 // Heading PID (instant calibration - integral term acts as automatic bias compensation)
-#define PID_KP_HEADING      0.40f   // Proportional gain (instant response to speed error)
-#define PID_KI_HEADING      0.050f  // Integral gain (auto-corrects persistent bias immediately)
-#define PID_KD_HEADING      0.12f   // Derivative gain (damping)
-#define PID_HEADING_I_MAX   80.0f   // Anti-windup limit (allows strong compensation)
+#define PID_KP_HEADING      0.50f   // Proportional gain - increased for heavier robot
+#define PID_KI_HEADING      0.080f  // Integral gain - increased to handle weight imbalance
+#define PID_KD_HEADING      0.15f   // Derivative gain - increased for better damping
+#define PID_HEADING_I_MAX   100.0f  // Anti-windup limit - increased for stronger compensation
 
 // ============================================================================
 // ROBOT BEHAVIOR CONFIGURATION
 // ============================================================================
 // Movement speeds (0.0 to 1.0)
-#define BASE_SPEED          0.4f    // Base speed at 40% - adjust as needed (0.3-0.8 typical)
+#define BASE_SPEED          0.35f   // Base speed reduced for added weight - adjust as needed
 
-#define TURN_SPEED          0.20f   // Speed during 90° turns
+#define TURN_SPEED          0.25f   // Speed during 90° turns - increased for heavier robot
 
 // Turn parameters
 #define TURN_ANGLE_DEG      90.0f   // Target angle for 90° turns
