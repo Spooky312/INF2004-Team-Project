@@ -8,19 +8,21 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Wi-Fi credentials - adjust these as necessary
-set(WIFI_SSID "Muhammad Ridwan")
-set(WIFI_PASSWORD "RIDwan3107")
-set(MQTT_SERVER_IP "192.168.43.1")  # Android hotspot default
+set(WIFI_SSID "Yh")
+set(WIFI_PASSWORD "tffycmzith")
+set(MQTT_SERVER_IP "192.168.163.8")
 
 
 # FreeRTOS kernel path - adjust this path as necessary
 set(FREERTOS_KERNEL_PATH "C:/Users/iikod/FreeRTOS-Kernel")
 
 
-# --- Wi-Fi + MQTT (FreeRTOS variant) ---
-set(PICO_LWIP_FREERTOS 1)
+# --- Wi-Fi + MQTT (NO_SYS=1 with background threading) ---
+# Using pico_cyw43_arch_lwip_threadsafe_background:
+# - CYW43 WiFi chip runs independently with SDK-managed background thread
+# - lwIP uses NO_SYS=1 (polling mode)
+# - Thread safety via cyw43_arch_lwip_begin/end critical sections
 set(PICO_LWIP_MQTT 1)
-set(PICO_CYW43_ARCH_DEFAULT lwip_sys_freertos)
 
 # -----------------------------------------------
 # SDK Initialization
@@ -74,7 +76,9 @@ add_executable(INF2004-TEAM-PROJECT
     drivers/encoder/encoder.c
     drivers/imu/imu.c
     drivers/pid/pid.c
-    drivers/mqtt/wifi_mqtt.c
+    drivers/networking/networkManager.c
+    drivers/networking/mqtt/mqtt.c
+    drivers/networking/wifi/wifi.c
     drivers/debug_led/debug_led.c
     drivers/chg_direction/chg_direction.c
 )
@@ -88,7 +92,9 @@ target_include_directories(INF2004-TEAM-PROJECT PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/drivers/encoder
     ${CMAKE_CURRENT_LIST_DIR}/drivers/imu
     ${CMAKE_CURRENT_LIST_DIR}/drivers/pid
-    ${CMAKE_CURRENT_LIST_DIR}/drivers/mqtt
+    ${CMAKE_CURRENT_LIST_DIR}/drivers/networking
+    ${CMAKE_CURRENT_LIST_DIR}/drivers/networking/mqtt
+    ${CMAKE_CURRENT_LIST_DIR}/drivers/networking/wifi
     ${CMAKE_CURRENT_LIST_DIR}/drivers/debug_led
     ${CMAKE_CURRENT_LIST_DIR}/drivers/chg_direction
     # ${CMAKE_CURRENT_LIST_DIR}/drivers/mqtt
@@ -130,9 +136,8 @@ target_link_libraries(INF2004-TEAM-PROJECT
     hardware_gpio
     hardware_pwm
     hardware_i2c
-    pico_lwip_freertos
     pico_lwip_mqtt
-    pico_cyw43_arch_lwip_sys_freertos
+    pico_cyw43_arch_lwip_threadsafe_background
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
 )
