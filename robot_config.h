@@ -50,8 +50,12 @@
 // ============================================================================
 // ENCODER CONFIGURATION
 // ============================================================================
-#define TICKS_PER_REV       360.0f  // Encoder ticks per wheel revolution
-#define WHEEL_CIRCUM_M      0.21f   // Wheel circumference in meters
+#define TICKS_PER_REV       40.0f   // Encoder ticks per wheel revolution
+                                     // 20 slots × 2 edges (rising + falling) = 40 ticks/rev
+                                     // NOTE: If distance seems too small, encoder may be slipping
+                                     //       or only one edge is being detected
+#define WHEEL_CIRCUM_M      0.1854f // Wheel circumference in meters (5.9cm diameter)
+                                     // Circumference = π × 0.059m = 0.1854m
 #define RPM_TIMEOUT_US      500000  // 0.5 sec - assume stopped if no ticks
 
 // ============================================================================
@@ -66,9 +70,9 @@
 
 // ---- Heading PID Gains ----
 // Tuned for smooth heading tracking with LSM303DLHC magnetometer
-#define PID_KP_HEADING      0.50f   // Proportional gain for heading control
-#define PID_KI_HEADING      0.02f   // Integral gain for heading control
-#define PID_KD_HEADING      0.15f   // Derivative gain for heading control
+#define PID_KP_HEADING      0.35f   // Proportional gain for heading control (reduced from 0.50)
+#define PID_KI_HEADING      0.01f   // Integral gain for heading control (reduced from 0.02)
+#define PID_KD_HEADING      0.12f   // Derivative gain for heading control (reduced from 0.15)
 #define PID_HEADING_I_MAX   50.0f   // Anti-windup limit for heading integral
 
 // ============================================================================
@@ -100,7 +104,10 @@
 // ============================================================================
 // MOTOR CONTROL PARAMETERS
 // ============================================================================
-#define TARGET_SPEED        80.0f   // Default target speed (0-255)
+#define TARGET_SPEED        55.0f   // Default target speed (0-255)
+                                    // Reduced from 80 to account for corrected encoder readings
+                                    // Old value (80) was calibrated with incorrect 27.2 ticks/rev
+                                    // New value: 80 × (27.2/40) = 54.4 ≈ 55
                                     // Adjust based on your motors and battery
 
 #define MAX_MOTOR_SPEED     255.0f  // Maximum PWM speed value

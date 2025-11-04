@@ -27,7 +27,8 @@ void encoder_irq_handler(uint gpio, uint32_t events)
 
     if (gpio == ENCODER_LEFT_PIN) {
         left_ticks++;
-        dist_left_m = (left_ticks / TICKS_PER_REV) * WHEEL_CIRCUM_M;
+        // Force float division: cast left_ticks to float first
+        dist_left_m = ((float)left_ticks / TICKS_PER_REV) * WHEEL_CIRCUM_M;
 
         // compute instantaneous rpm
         int64_t dt_us = absolute_time_diff_us(last_left_time, now);
@@ -37,7 +38,8 @@ void encoder_irq_handler(uint gpio, uint32_t events)
 
     if (gpio == ENCODER_RIGHT_PIN) {
         right_ticks++;
-        dist_right_m = (right_ticks / TICKS_PER_REV) * WHEEL_CIRCUM_M;
+        // Force float division: cast right_ticks to float first
+        dist_right_m = ((float)right_ticks / TICKS_PER_REV) * WHEEL_CIRCUM_M;
 
         int64_t dt_us = absolute_time_diff_us(last_right_time, now);
         if (dt_us > 0) rpm_right = 60.0f * 1e6f / (TICKS_PER_REV * dt_us);
