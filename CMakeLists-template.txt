@@ -8,18 +8,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Wi-Fi credentials - adjust these as necessary
-set(WIFI_SSID "Muhammad Ridwan")
-set(WIFI_PASSWORD "RIDwan3107")
-set(MQTT_SERVER_IP "172.20.10.6")  # PC IP here
+set(WIFI_SSID "Muhammad Ridwan") #SSID here
+set(WIFI_PASSWORD "RIDwan3107") #password here
+set(MQTT_SERVER_IP "172.20.10.6")  # pc IP here
 
 
 # FreeRTOS kernel path - adjust this path as necessary
-set(FREERTOS_KERNEL_PATH "C:/Users/iikod/FreeRTOS-Kernel")
+set(FREERTOS_KERNEL_PATH "$ENV{HOME}/FreeRTOS-Kernel")
 
 
 # --- Wi-Fi + MQTT (FreeRTOS variant) ---
-set(PICO_LWIP_FREERTOS 1)
-set(PICO_LWIP_MQTT 1)
 set(PICO_CYW43_ARCH_DEFAULT lwip_sys_freertos)
 
 # -----------------------------------------------
@@ -48,7 +46,7 @@ include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 # -----------------------------------------------
 # FreeRTOS Import
 # -----------------------------------------------
-set(FREE_RTOS_KERNEL_SMP 0 CACHE BOOL "Disable SMP mode" FORCE)
+# set(FREE_RTOS_KERNEL_SMP 0 CACHE BOOL "Disable SMP mode" FORCE)
 if (NOT FREERTOS_KERNEL_PATH AND NOT DEFINED ENV{FREERTOS_KERNEL_PATH})
     message(FATAL_ERROR "FREERTOS_KERNEL_PATH not defined. Example needs FreeRTOS-Kernel cloned.")
 endif()
@@ -65,8 +63,11 @@ pico_sdk_init()
 # -----------------------------------------------
 add_executable(INF2004-TEAM-PROJECT
     main.c
-    
-    # Core drivers
+    # Populate with path to your c files e.g.
+    # drivers/ir_sensor/decoding/barcode_decoder.c
+    # drivers/ir_sensor/line_detection/line_detection.c
+    # drivers/imu/simulated_imu.c
+
     src/motor/motor.c
     src/encoder/encoder.c
     src/imu/imu.c
@@ -74,6 +75,19 @@ add_executable(INF2004-TEAM-PROJECT
     src/line_sensor/line_sensor.c
     src/barcode/barcode.c
     src/state_machine/state_machine.c
+
+    # drivers/motor/motor.c
+    # drivers/encoder/encoder.c
+    # drivers/imu/imu.c
+    # drivers/pid/pid.c
+    # # drivers/mqtt/wifi_mqtt.c
+    # drivers/debug_led/debug_led.c
+    # drivers/chg_direction/chg_direction.c
+
+    # drivers/networking/networkManager.c
+    # drivers/networking/wifi/wifi.c
+    # drivers/networking/mqtt/mqtt.c
+
 )
 
 # -----------------------------------------------
@@ -92,7 +106,7 @@ target_include_directories(INF2004-TEAM-PROJECT PRIVATE
     ${FREERTOS_KERNEL_PATH}/include
     ${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/include
 
-    # Core SDK Wi-Fi & networking paths
+    # ✅ Core SDK Wi-Fi & networking paths
     ${PICO_SDK_PATH}/src/rp2_common/pico_cyw43_driver/include
     ${PICO_SDK_PATH}/src/rp2_common/pico_cyw43_arch/include
     ${PICO_SDK_PATH}/lib/cyw43-driver/include
