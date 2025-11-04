@@ -21,6 +21,8 @@
 #include "src/line_sensor/line_sensor.h"
 #include "src/barcode/barcode.h"
 #include "src/state_machine/state_machine.h"
+#include "src/networking/mqtt/mqtt.h"
+#include "src/networking/networkManager.h"
 
 // All configuration now in robot_config.h:
 // - BASE_SPEED, TURN_SPEED
@@ -43,18 +45,21 @@ static uint32_t total_barcodes_detected = 0;
 // Routes GPIO interrupts to the appropriate handler
 void gpio_interrupt_router(uint gpio, uint32_t events)
 {
-    if (gpio == EMERGENCY_STOP_PIN) {
+    if (gpio == EMERGENCY_STOP_PIN)
+    {
         // Handle emergency stop
         motor_stop();
         emergency_stop_triggered = true;
-        
-        if (state_mutex != NULL) {
+
+        if (state_mutex != NULL)
+        {
             BaseType_t xHigherPriorityTaskWoken = pdFALSE;
             xSemaphoreGiveFromISR(state_mutex, &xHigherPriorityTaskWoken);
         }
         printf("\n!!! EMERGENCY STOP TRIGGERED (GP20) !!!\n");
     }
-    else if (gpio == 3 || gpio == 6) {
+    else if (gpio == 3 || gpio == 6)
+    {
         // Route to encoder handler (GP3 = left, GP6 = right)
         encoder_irq_handler(gpio, events);
     }
@@ -101,7 +106,7 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
         break;
     case CMD_UTURN:
         action = "U-TURN";
-        event = EVENT_BARCODE_FORWARD;  // Can handle U-turn logic later
+        event = EVENT_BARCODE_FORWARD; // Can handle U-turn logic later
         valid_command = true;
         break;
     default:
@@ -110,7 +115,7 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
     }
 
     printf("║ Command:      %-24s║\n", action);
-    
+
     // Get robot status
     float distance = encoder_get_distance_m();
     float rpm_l = encoder_get_rpm_left();
@@ -118,12 +123,13 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
     float rpm_avg = (rpm_l + rpm_r) / 2.0f;
     float yaw_raw, yaw;
     imu_get_heading_deg(&yaw_raw, &yaw);
-    
+
     // Calculate current actual motor fraction (approximation based on RPM)
     // Assuming max RPM is around 150 at full speed (adjust if needed)
     float current_motor_fraction = (rpm_avg / 150.0f);
-    if (current_motor_fraction > 1.0f) current_motor_fraction = 1.0f;
-    
+    if (current_motor_fraction > 1.0f)
+        current_motor_fraction = 1.0f;
+
     printf("║ Distance:     %.2fm%-20s║\n", distance, "");
     printf("║ Speed:        %.0f / %.0f RPM (avg: %.0f)%-4s║\n", rpm_l, rpm_r, rpm_avg, "");
     printf("║ Base Speed:   %.3f (%.0f%%)%-14s║\n", BASE_SPEED, BASE_SPEED * 100.0f, "");
@@ -144,91 +150,101 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
 void barcode_scan_task(void *params)
 {
     printf("[BARCODE_TASK] Task started\n");
-    
+
     while (1)
     {
         // Call barcode_update to handle timeouts
         // The actual barcode scanning happens in timer interrupt
         barcode_update();
-        
+
         vTaskDelay(pdMS_TO_TICKS(BARCODE_UPDATE_RATE_MS)); // 100Hz polling
     }
 }
 
 // ===== Autonomous barcode speed control task =====
 // Configuration constants
-#define BARCODE_TARGET_NARROW_MS  25.0f   // Target narrow duration in ms (tune this)
-#define SPEED_CONTROL_RATE_MS     100     // Control loop rate (100ms = 10Hz)
-#define SPEED_CONTROL_ENABLE      0       // DISABLED - Manual calibration mode
-#define MIN_NARROW_SAMPLES        3       // Minimum samples before speed adjustment
+#define BARCODE_TARGET_NARROW_MS 25.0f // Target narrow duration in ms (tune this)
+#define SPEED_CONTROL_RATE_MS 100      // Control loop rate (100ms = 10Hz)
+#define SPEED_CONTROL_ENABLE 0         // DISABLED - Manual calibration mode
+#define MIN_NARROW_SAMPLES 3           // Minimum samples before speed adjustment
 
 void barcode_speed_control_task(void *params)
 {
     printf("[SPEED_CTRL] Autonomous speed control task started\n");
     printf("[SPEED_CTRL] Target narrow duration: %.1f ms\n", BARCODE_TARGET_NARROW_MS);
-    
-    #if !SPEED_CONTROL_ENABLE
+
+#if !SPEED_CONTROL_ENABLE
     printf("[SPEED_CTRL] DISABLED - task will sleep\n");
-    while(1) vTaskDelay(pdMS_TO_TICKS(1000));
+    while (1)
+        vTaskDelay(pdMS_TO_TICKS(1000));
     return;
-    #endif
-    
+#endif
+
     // Wait for module width calibration
-    while (barcode_get_module_width_m() <= 0.0f) {
+    while (barcode_get_module_width_m() <= 0.0f)
+    {
         printf("[SPEED_CTRL] Waiting for calibration... (module_width not set)\n");
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
-    
+
     printf("[SPEED_CTRL] Calibrated! Module width: %.5f m\n", barcode_get_module_width_m());
     printf("[SPEED_CTRL] Speed control active\n");
-    
+
     // PID controller state (simple integral control)
-    float speed_base = BASE_SPEED;  // Start from configured base speed
+    float speed_base = BASE_SPEED; // Start from configured base speed
     float integral = 0.0f;
-    const float Kp = 0.002f;  // Proportional gain (tune this)
-    const float Ki = 0.0005f; // Integral gain (tune this)
+    const float Kp = 0.002f;            // Proportional gain (tune this)
+    const float Ki = 0.0005f;           // Integral gain (tune this)
     const float MAX_ADJUSTMENT = 0.15f; // Max ±15% speed adjustment
-    
+
     while (1)
     {
         // Get average narrow duration from recent scans
         float avg_narrow_ms = barcode_get_avg_narrow_duration_ms();
-        
-        if (avg_narrow_ms > 0.0f) {
+
+        if (avg_narrow_ms > 0.0f)
+        {
             // Compute error (positive = segments too long = going too slow)
             float error = BARCODE_TARGET_NARROW_MS - avg_narrow_ms;
-            
+
             // Only adjust if we have enough samples
-            if (barcode_get_narrow_sample_count() >= MIN_NARROW_SAMPLES) {
+            if (barcode_get_narrow_sample_count() >= MIN_NARROW_SAMPLES)
+            {
                 // PID control
                 integral += error;
-                
+
                 // Anti-windup
-                if (integral > MAX_ADJUSTMENT / Ki) integral = MAX_ADJUSTMENT / Ki;
-                if (integral < -MAX_ADJUSTMENT / Ki) integral = -MAX_ADJUSTMENT / Ki;
-                
+                if (integral > MAX_ADJUSTMENT / Ki)
+                    integral = MAX_ADJUSTMENT / Ki;
+                if (integral < -MAX_ADJUSTMENT / Ki)
+                    integral = -MAX_ADJUSTMENT / Ki;
+
                 float adjustment = (Kp * error) + (Ki * integral);
-                
+
                 // Clamp adjustment
-                if (adjustment > MAX_ADJUSTMENT) adjustment = MAX_ADJUSTMENT;
-                if (adjustment < -MAX_ADJUSTMENT) adjustment = -MAX_ADJUSTMENT;
-                
+                if (adjustment > MAX_ADJUSTMENT)
+                    adjustment = MAX_ADJUSTMENT;
+                if (adjustment < -MAX_ADJUSTMENT)
+                    adjustment = -MAX_ADJUSTMENT;
+
                 // Apply speed adjustment (symmetric for both wheels during line following)
                 float target_speed = speed_base + adjustment;
-                
+
                 // Clamp to safe range
-                if (target_speed < 0.2f) target_speed = 0.2f;
-                if (target_speed > 0.7f) target_speed = 0.7f;
-                
+                if (target_speed < 0.2f)
+                    target_speed = 0.2f;
+                if (target_speed > 0.7f)
+                    target_speed = 0.7f;
+
                 // Update base speed smoothly (low-pass filter)
                 speed_base = speed_base * 0.95f + target_speed * 0.05f;
-                
+
                 // Debug output
                 printf("[SPEED_CTRL] narrow=%.1fms target=%.1fms err=%.1f adj=%+.3f speed=%.3f\n",
                        avg_narrow_ms, BARCODE_TARGET_NARROW_MS, error, adjustment, speed_base);
             }
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(SPEED_CONTROL_RATE_MS));
     }
 }
@@ -245,35 +261,35 @@ void barcode_calibrate_module_width(float known_motor_fraction)
     printf("║  Running at motor fraction: %.2f            ║\n", known_motor_fraction);
     printf("║  Collecting barcode samples...             ║\n");
     printf("╚════════════════════════════════════════════╝\n\n");
-    
+
     // Set motors to known speed
     motor_set_speed(known_motor_fraction, known_motor_fraction);
-    
+
     // Wait for speed to stabilize
     vTaskDelay(pdMS_TO_TICKS(500));
-    
+
     // Clear narrow history
     barcode_reset_narrow_history();
-    
+
     // Collect samples for 5 seconds
     printf("[CALIBRATE] Collecting samples for 5 seconds...\n");
     vTaskDelay(pdMS_TO_TICKS(5000));
-    
+
     // Get measured values
     float rpm_left = encoder_get_rpm_left();
     float rpm_right = encoder_get_rpm_right();
     float rpm_avg = (rpm_left + rpm_right) * 0.5f;
     float v_meas_mps = rpm_avg * WHEEL_CIRCUM_M / 60.0f;
-    
+
     float avg_narrow_ms = barcode_get_avg_narrow_duration_ms();
-    
+
     if (avg_narrow_ms > 0.0f && rpm_avg > 0.0f) {
         // Compute module width
         float module_width_m = v_meas_mps * (avg_narrow_ms / 1000.0f);
-        
+
         // Store it
         barcode_set_module_width_m(module_width_m);
-        
+
         printf("\n");
         printf("╔════════════════════════════════════════════╗\n");
         printf("║  ✅ CALIBRATION COMPLETE                   ║\n");
@@ -282,7 +298,7 @@ void barcode_calibrate_module_width(float known_motor_fraction)
         printf("║  Measured RPM:      %.1f                   ║\n", rpm_avg);
         printf("║  Linear speed:      %.3f m/s              ║\n", v_meas_mps);
         printf("║  Avg narrow:        %.1f ms                ║\n", avg_narrow_ms);
-        printf("║  Module width:      %.5f m (%.2f mm)      ║\n", 
+        printf("║  Module width:      %.5f m (%.2f mm)      ║\n",
                module_width_m, module_width_m * 1000.0f);
         printf("╠════════════════════════════════════════════╣\n");
         printf("║  For target narrow = %.1f ms:              ║\n", BARCODE_TARGET_NARROW_MS);
@@ -297,7 +313,6 @@ void barcode_calibrate_module_width(float known_motor_fraction)
     }
 }
 */
-
 
 // ===== Turn execution task =====
 void turn_task(void *params)
@@ -397,14 +412,14 @@ void line_follow_task(void *params)
     printf("[LINE_FOLLOW] Base Speed: %.2f | BLACK→RIGHT, WHITE→LEFT (sine-wave)\n", BASE_SPEED);
 
     uint32_t debug_counter = 0;
-    
+
     while (1)
     {
         // Check emergency stop
         if (emergency_stop_triggered)
         {
             motor_stop();
-            line_sensor_reset_state();  // Reset line following state
+            line_sensor_reset_state(); // Reset line following state
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -425,7 +440,7 @@ void line_follow_task(void *params)
         // Only run in LINE_FOLLOWING state
         if (state != STATE_LINE_FOLLOWING)
         {
-            line_sensor_reset_state();  // Reset line following state
+            line_sensor_reset_state(); // Reset line following state
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -433,14 +448,14 @@ void line_follow_task(void *params)
         // Get motor commands from line sensor driver
         motor_commands_t commands = line_sensor_compute_motor_commands();
         motor_set_speed(commands.left_speed, commands.right_speed);
-        
+
         // Debug output every 200ms - COMMENTED OUT (only show barcode info)
         // debug_counter++;
         // if (debug_counter >= 20)  // 20 * 10ms = 200ms
         // {
         //     line_state_t line_state = line_sensor_read();
         //     const char* sensor_str = (line_state == LINE_BLACK) ? "BLACK" : "WHITE";
-        //     printf("[%s] Motors: L:%.3f R:%.3f\n", 
+        //     printf("[%s] Motors: L:%.3f R:%.3f\n",
         //            sensor_str, commands.left_speed, commands.right_speed);
         //     debug_counter = 0;
         // }
@@ -457,7 +472,6 @@ void line_follow_task(void *params)
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz update
     }
 }
-
 
 // ===== State monitor task =====
 void state_monitor_task(void *params)
@@ -530,55 +544,112 @@ void state_monitor_task(void *params)
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
-
 // ===== Telemetry task =====
 
-// void telemetry_task(void *params)
-// {
-//     printf("[TELEMETRY] Task started\n");
+void telemetry_task(void *params)
+{
+    printf("[TELEMETRY] Task started\n");
 
-//     uint32_t report_count = 0;
+    uint32_t report_count = 0;
+    static int mqtt_fail_count = 0; // track MQTT failures
 
-//     while (1)
-//     {
-//         vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_RATE_MS)); // 5Hz
+    while (1)
+    {
+        vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_RATE_MS)); // 5Hz
 
-//         const robot_context_t *ctx;
-//         robot_state_t state;
+        const robot_context_t *ctx = NULL;
+        robot_state_t state = STATE_IDLE;
 
-//         if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-//         {
-//             ctx = state_machine_get_context();
-//             state = ctx->current_state;
+        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+        {
+            ctx = state_machine_get_context();
+            state = ctx->current_state;
 
-//             printf("\n----- Telemetry Report #%lu -----\n", ++report_count);
-//             printf("State:         %s\n", state_machine_state_name(state));
-//             printf("Line Error:    %.3f\n", ctx->line_error);
-//             printf("Line Status:   %s\n", ctx->line_on_track ? "ON TRACK" : "OFF TRACK");
-//             printf("Speed L/R:     %.2f / %.2f\n", ctx->current_speed_left, ctx->current_speed_right);
-//             printf("RPM L/R:       %.0f / %.0f\n", encoder_get_rpm_left(), encoder_get_rpm_right());
-//             printf("Distance:      %.2f m\n", ctx->distance_traveled_m);
-//             printf("Last Barcode:  %s\n",
-//                    ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : 
-//                    ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT" :
-//                    ctx->last_barcode_cmd == CMD_STOP ? "STOP" :
-//                    ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD" : "NONE");
+            // Capture values used both for printing and JSON
+            float rpm_l = encoder_get_rpm_left();
+            float rpm_r = encoder_get_rpm_right();
 
-//             uint16_t line_raw = line_sensor_read_raw();
-//             float yaw_raw, yaw;
-//             imu_get_heading_deg(&yaw_raw, &yaw);
-//             const char* last_barcode = barcode_get_last_decoded();
-//             printf("Raw Line ADC:  %u\n", line_raw);
-//             printf("IMU Yaw:       %.1f°\n", yaw);
-//             printf("Last Barcode:  \"%s\" (Total: %lu)\n", 
-//                    last_barcode ? last_barcode : "none", total_barcodes_detected);
-//             printf("Barcode Scan:  ACTIVE\n");  // Always active after startup
-//             printf("-----------------------------\n\n");
+            uint16_t line_raw = line_sensor_read_raw();
+            float yaw_raw = 0.0f, yaw = 0.0f;
+            imu_get_heading_deg(&yaw_raw, &yaw);
 
-//             xSemaphoreGive(state_mutex);
-//         }
-//     }
-// }
+            const char *last_barcode = barcode_get_last_decoded();
+
+            printf("\n----- Telemetry Report #%lu -----\n", ++report_count);
+            printf("State:         %s\n", state_machine_state_name(state));
+            printf("Line Error:    %.3f\n", ctx->line_error);
+            printf("Line Status:   %s\n", ctx->line_on_track ? "ON TRACK" : "OFF TRACK");
+            printf("Speed L/R:     %.2f / %.2f\n", ctx->current_speed_left, ctx->current_speed_right);
+            printf("RPM L/R:       %.0f / %.0f\n", rpm_l, rpm_r);
+            printf("Distance:      %.2f m\n", ctx->distance_traveled_m);
+            printf("Last Barcode:  %s\n",
+                   ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT"
+                                                            : ctx->last_barcode_cmd == CMD_STOP    ? "STOP"
+                                                            : ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD"
+                                                                                                   : "NONE");
+
+            printf("Raw Line ADC:  %u\n", line_raw);
+            printf("IMU Yaw:       %.1f°\n", yaw);
+            printf("Last Barcode:  \"%s\" (Total: %lu)\n",
+                   last_barcode ? last_barcode : "none", total_barcodes_detected);
+            printf("Barcode Scan:  ACTIVE\n"); // Always active after startup
+            printf("-----------------------------\n\n");
+
+            // Build JSON
+            float dist_m = ctx ? ctx->distance_traveled_m : 0.0f;
+            float target_heading = 0.0f;
+            float obstacle_distance_cm = 0.0f;
+            float obstacle_width_cm = 0.0f;
+            unsigned long obstacle_count = 0UL;
+
+            const char *state_str = state_machine_state_name(state);
+            const char *cmd_str =
+                (ctx->last_barcode_cmd == CMD_LEFT) ? "LEFT" : (ctx->last_barcode_cmd == CMD_RIGHT) ? "RIGHT"
+                                                           : (ctx->last_barcode_cmd == CMD_STOP)    ? "STOP"
+                                                           : (ctx->last_barcode_cmd == CMD_FORWARD) ? "FORWARD"
+                                                                                                    : "NONE"; // no UTURN
+
+            bool line_on_track = ctx->line_on_track;
+
+            if (mqtt_app_is_connected())
+            {
+                char msg[768];
+                snprintf(msg, sizeof msg,
+                         "{"
+                         "\"rpm_l\":%.2f,\"rpm_r\":%.2f,"
+                         "\"dist_m\":%.3f,"
+                         "\"heading_raw\":%.2f,\"heading_filt\":%.2f,\"target_heading\":%.2f,"
+                         "\"obstacle_distance_cm\":%.2f,"
+                         "\"obstacle_width_cm\":%.2f,"
+                         "\"obstacle_count\":%lu,"
+                         "\"state\":\"%s\","
+                         "\"barcode_cmd\":\"%s\","
+                         "\"line_on_track\":%s"
+                         "}",
+                         rpm_l, rpm_r,
+                         dist_m,
+                         yaw_raw, yaw, target_heading, // use yaw as filtered heading
+                         obstacle_distance_cm,
+                         obstacle_width_cm,
+                         obstacle_count,
+                         state_str,
+                         cmd_str,
+                         (line_on_track ? "true" : "false"));
+
+                mqtt_app_publish("pico/telemetry", msg, 0, 0);
+                printf("[TELEMETRY] Published #%lu: %s\n", report_count, msg);
+                mqtt_fail_count = 0;
+            }
+            else
+            {
+                mqtt_fail_count++;
+                printf("[TELEMETRY] MQTT not connected (fail #%d)\n", mqtt_fail_count);
+            }
+
+            xSemaphoreGive(state_mutex);
+        }
+    }
+}
 
 // ===== Main =====
 int main()
@@ -601,16 +672,16 @@ int main()
     state_machine_init();
 
     printf("[INIT] Setting up GPIO interrupts...\n");
-    
+
     gpio_init(EMERGENCY_STOP_PIN);
     gpio_set_dir(EMERGENCY_STOP_PIN, GPIO_IN);
     gpio_pull_up(EMERGENCY_STOP_PIN);
-    
-    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL, 
+
+    gpio_set_irq_enabled_with_callback(EMERGENCY_STOP_PIN, GPIO_IRQ_EDGE_FALL,
                                        true, &gpio_interrupt_router);
     gpio_set_irq_enabled(3, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
     gpio_set_irq_enabled(6, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-    
+
     printf("[INIT] Interrupts enabled: GP3 (left enc), GP6 (right enc), GP20 (e-stop)\n");
 
     barcode_set_callback(on_barcode_detected);
@@ -618,24 +689,26 @@ int main()
 
     printf("[INIT] Creating FreeRTOS tasks...\n");
 
+    xTaskCreate(network_manager_task, "NetMgr", 2048, NULL, NET_TASK_PRIORITY, NULL);    
+
     xTaskCreate(line_follow_task, "LineFollow", LINE_FOLLOW_STACK_SIZE, NULL,
                 LINE_FOLLOW_TASK_PRIORITY, NULL);
     xTaskCreate(barcode_scan_task, "BarcodeScanner", 2048, NULL,
-                LINE_FOLLOW_TASK_PRIORITY + 1, NULL);  // Higher priority than line follow
+                LINE_FOLLOW_TASK_PRIORITY + 1, NULL); // Higher priority than line follow
     xTaskCreate(barcode_speed_control_task, "SpeedCtrl", 2048, NULL,
-                LINE_FOLLOW_TASK_PRIORITY, NULL);  // Same priority as line follow
+                LINE_FOLLOW_TASK_PRIORITY, NULL); // Same priority as line follow
     xTaskCreate(state_monitor_task, "StateMonitor", STATE_MONITOR_STACK_SIZE, NULL,
                 STATE_MONITOR_PRIORITY, NULL);
-    // xTaskCreate(telemetry_task, "Telemetry", TELEMETRY_STACK_SIZE, NULL,
-    //             TELEMETRY_TASK_PRIORITY, NULL);
+    xTaskCreate(telemetry_task, "Telemetry", TELEMETRY_STACK_SIZE, NULL,
+                TELEMETRY_TASK_PRIORITY, NULL);
 
     printf("[INIT] Starting barcode scanner...\n");
     barcode_start_scanning();
-    
+
     // Optional: Run calibration at startup (comment out after first calibration)
     // Uncomment the line below, flash, run for ~10 seconds, then re-comment and reflash
     // barcode_calibrate_module_width(BASE_SPEED);  // Calibrate at base speed
-    
+
     printf("[INIT] Starting robot...\n");
     state_machine_process_event(EVENT_START);
 

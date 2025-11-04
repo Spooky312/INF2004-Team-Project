@@ -118,6 +118,7 @@
 #define TELEMETRY_TASK_PRIORITY     (tskIDLE_PRIORITY + 1)
 #define TURN_TASK_PRIORITY          (tskIDLE_PRIORITY + 3)
 #define STATE_MONITOR_PRIORITY      (tskIDLE_PRIORITY + 2)
+#define NET_TASK_PRIORITY           (tskIDLE_PRIORITY + 5)
 
 // ============================================================================
 // FREERTOS TASK STACK SIZES
