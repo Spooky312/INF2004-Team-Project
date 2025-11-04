@@ -45,6 +45,10 @@ static uint32_t last_status_ms = 0;
 static seg_t win[9];
 static int win_len = 0;
 
+// Warmup counter - skip initial segments to let car reach stable speed
+static int warmup_segments_remaining = 0;
+#define WARMUP_SKIP_COUNT 4  // Skip first 4 segments (usually 2 bars + 2 spaces)
+
 // Decoder state
 static scan_state_t scan_state = SCAN_IDLE;
 static char decoded_msg[MAX_MESSAGE_LEN];
@@ -146,11 +150,35 @@ static void reset_scan_state(void) {
     reset_window();
     scan_state = SCAN_IDLE;
     decoded_msg[0] = '\0';
+    warmup_segments_remaining = WARMUP_SKIP_COUNT;  // Reset warmup counter
 }
 
 // Process segment
 static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
     if (dur_ms == 0) return;
+    
+    // **WARMUP: Skip first few segments to let car reach stable speed**
+    if (warmup_segments_remaining > 0) {
+        warmup_segments_remaining--;
+        #if DEBUG_SEGMENTS
+        printf("WARMUP: Skipping %c %u ms (%d remaining)\n", 
+               ended_is_bar ? 'B' : 'S', (unsigned)dur_ms, warmup_segments_remaining);
+        #endif
+        return;
+    }
+    
+    // **REJECT SEGMENTS THAT ARE TOO LONG** (likely not barcode data)
+    // At BASE_SPEED=0.4, typical narrow should be 20-80ms, wide should be 60-200ms
+    // Anything over 300ms is probably car stopped/paused or off barcode
+    const uint16_t MAX_SEGMENT_MS = 300;
+    if (dur_ms > MAX_SEGMENT_MS) {
+        #if DEBUG_SEGMENTS
+        printf("SEG REJECT: %c %u ms (too long, max %u ms)\n", 
+               ended_is_bar ? 'B' : 'S', (unsigned)dur_ms, MAX_SEGMENT_MS);
+        #endif
+        reset_window();  // Reset and wait for valid data
+        return;
+    }
 
     // Start only on a BAR
     if (win_len == 0) {
@@ -178,11 +206,7 @@ static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
     
     if (win_len < 9) return;
 
-    // 9 segments collected -> classify FORWARD ONLY
-    char ch = 0;
-    uint16_t mask = build_mask_top3(win);
-    
-    // Track narrow durations for speed control (only spaces and bars that are narrow)
+    // 9 segments collected -> validate ratios before classification
     // Find narrowest 6 elements (should be the 'n' narrow ones in Code-39)
     uint16_t sorted_durs[9];
     for (int k = 0; k < 9; k++) sorted_durs[k] = win[k].dur_ms;
@@ -196,12 +220,34 @@ static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
             }
         }
     }
+    
     // Average the narrowest 6 (excluding the 3 wide ones)
     uint32_t narrow_sum = 0;
     for (int k = 0; k < 6; k++) narrow_sum += sorted_durs[k];
     uint16_t avg_narrow = (uint16_t)(narrow_sum / 6);
     
-    // Store in circular buffer
+    // Average the widest 3
+    uint32_t wide_sum = 0;
+    for (int k = 6; k < 9; k++) wide_sum += sorted_durs[k];
+    uint16_t avg_wide = (uint16_t)(wide_sum / 3);
+    
+    // **VALIDATE WIDE/NARROW RATIO** (Code-39 spec: wide should be 2.2-3.0x narrow)
+    // Allow 1.8-4.0x range for tolerance
+    float ratio = (float)avg_wide / (float)avg_narrow;
+    if (ratio < 1.8f || ratio > 4.0f) {
+        #if DEBUG_WINDOW_DUMP
+        printf("WIN9 REJECT: narrow_avg=%u wide_avg=%u ratio=%.2f (out of range 1.8-4.0)\n",
+               avg_narrow, avg_wide, ratio);
+        #endif
+        reset_window();
+        return;
+    }
+    
+    // Classify using top-3 mask
+    char ch = 0;
+    uint16_t mask = build_mask_top3(win);
+    
+    // Store narrow average in circular buffer for speed control
     if (narrow_count < NARROW_HISTORY_SIZE) {
         narrow_durations[narrow_count++] = avg_narrow;
     } else {
@@ -222,7 +268,7 @@ static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
         bool is_wide = (mask & (1u << (8 - i))) != 0;
         printf("%c", is_wide ? 'W' : 'n');
     }
-    printf(" | narrow_avg=%u -> ", avg_narrow);
+    printf(" | n=%u w=%u ratio=%.2f -> ", avg_narrow, avg_wide, ratio);
 #endif
     
     bool ok = lookup_mask(mask, &ch);

@@ -61,10 +61,10 @@
 // ============================================================================
 // BARCODE SCANNER CONFIGURATION
 // ============================================================================
-#define BARCODE_SAMPLE_MS   5       // Sampling period in milliseconds
+#define BARCODE_SAMPLE_MS   1       // Sampling period in milliseconds
 #define BARCODE_VERIFY_MS   2       // Verification delay
 #define BARCODE_BAR_IS_LOW  0       // 0: black=HIGH, 1: black=LOW
-#define BARCODE_RESET_MS    1000    // Reset timeout if no activity (ms)
+#define BARCODE_RESET_MS    2000    // Reset timeout if no activity (ms) - increased for inter-character gaps
 #define BARCODE_MAX_LEN     16      // Maximum decoded message length
 #define BARCODE_STATUS_MS   5000    // Status message interval (0 to disable)
 

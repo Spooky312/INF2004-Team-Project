@@ -115,11 +115,19 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
     float distance = encoder_get_distance_m();
     float rpm_l = encoder_get_rpm_left();
     float rpm_r = encoder_get_rpm_right();
+    float rpm_avg = (rpm_l + rpm_r) / 2.0f;
     float yaw_raw, yaw;
     imu_get_heading_deg(&yaw_raw, &yaw);
     
+    // Calculate current actual motor fraction (approximation based on RPM)
+    // Assuming max RPM is around 150 at full speed (adjust if needed)
+    float current_motor_fraction = (rpm_avg / 150.0f);
+    if (current_motor_fraction > 1.0f) current_motor_fraction = 1.0f;
+    
     printf("║ Distance:     %.2fm%-20s║\n", distance, "");
-    printf("║ Speed:        %.0f / %.0f RPM%-13s║\n", rpm_l, rpm_r, "");
+    printf("║ Speed:        %.0f / %.0f RPM (avg: %.0f)%-4s║\n", rpm_l, rpm_r, rpm_avg, "");
+    printf("║ Base Speed:   %.3f (%.0f%%)%-14s║\n", BASE_SPEED, BASE_SPEED * 100.0f, "");
+    printf("║ Current Est:  %.3f (%.0f%%)%-14s║\n", current_motor_fraction, current_motor_fraction * 100.0f, "");
     printf("║ Heading:      %.1f°%-20s║\n", yaw, "");
     printf("║ Action:       %-24s║\n", valid_command ? "EXECUTING" : "IGNORING");
     printf("╚════════════════════════════════════════╝\n\n");
@@ -151,7 +159,7 @@ void barcode_scan_task(void *params)
 // Configuration constants
 #define BARCODE_TARGET_NARROW_MS  25.0f   // Target narrow duration in ms (tune this)
 #define SPEED_CONTROL_RATE_MS     100     // Control loop rate (100ms = 10Hz)
-#define SPEED_CONTROL_ENABLE      1       // Set to 0 to disable autonomous speed control
+#define SPEED_CONTROL_ENABLE      0       // DISABLED - Manual calibration mode
 #define MIN_NARROW_SAMPLES        3       // Minimum samples before speed adjustment
 
 void barcode_speed_control_task(void *params)
@@ -225,7 +233,8 @@ void barcode_speed_control_task(void *params)
     }
 }
 
-// ===== One-time barcode calibration routine =====
+/*
+// ===== One-time barcode calibration routine (DISABLED - Manual calibration mode) =====
 // Call this once to measure and set module_width_m
 void barcode_calibrate_module_width(float known_motor_fraction)
 {
@@ -287,6 +296,8 @@ void barcode_calibrate_module_width(float known_motor_fraction)
         printf("[CALIBRATE] avg_narrow=%.1f ms, rpm=%.1f\n", avg_narrow_ms, rpm_avg);
     }
 }
+*/
+
 
 // ===== Turn execution task =====
 void turn_task(void *params)
@@ -423,16 +434,16 @@ void line_follow_task(void *params)
         motor_commands_t commands = line_sensor_compute_motor_commands();
         motor_set_speed(commands.left_speed, commands.right_speed);
         
-        // Debug output every 200ms
-        debug_counter++;
-        if (debug_counter >= 20)  // 20 * 10ms = 200ms
-        {
-            line_state_t line_state = line_sensor_read();
-            const char* sensor_str = (line_state == LINE_BLACK) ? "BLACK" : "WHITE";
-            printf("[%s] Motors: L:%.3f R:%.3f\n", 
-                   sensor_str, commands.left_speed, commands.right_speed);
-            debug_counter = 0;
-        }
+        // Debug output every 200ms - COMMENTED OUT (only show barcode info)
+        // debug_counter++;
+        // if (debug_counter >= 20)  // 20 * 10ms = 200ms
+        // {
+        //     line_state_t line_state = line_sensor_read();
+        //     const char* sensor_str = (line_state == LINE_BLACK) ? "BLACK" : "WHITE";
+        //     printf("[%s] Motors: L:%.3f R:%.3f\n", 
+        //            sensor_str, commands.left_speed, commands.right_speed);
+        //     debug_counter = 0;
+        // }
 
         // Update state machine context
         float distance = encoder_get_distance_m();
@@ -447,203 +458,6 @@ void line_follow_task(void *params)
     }
 }
 
-/*
-// ===== ORIGINAL LINE FOLLOWING LOGIC (COMMENTED OUT FOR PID TESTING) =====
-void line_follow_task(void *params)
-{
-    printf("[LINE_FOLLOW] Task started (single sensor + encoder PID)\n");
-
-    // Single-sensor line following variables (from original)
-    typedef enum
-    {
-        SEARCH_NONE,
-        SEARCH_LEFT,
-        SEARCH_RIGHT
-    } search_direction_t;
-
-    search_direction_t last_turn = SEARCH_NONE;
-    uint32_t recovery_count = 0;   // Counter for recovery stabilization
-    bool was_off_track = false;    // Track if we were just off the line
-
-    // Barcode mode variables
-    volatile bool barcode_scanning_active = false;
-    uint32_t time_on_line_start = 0;
-    uint32_t barcode_mode_start_time = 0;
-
-    while (1)
-    {
-        // Check emergency stop
-        if (emergency_stop_triggered)
-        {
-            motor_stop();
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        robot_state_t state;
-
-        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-        {
-            state = state_machine_get_state();
-            xSemaphoreGive(state_mutex);
-        }
-        else
-        {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        // Only follow line in LINE_FOLLOWING state
-        if (state != STATE_LINE_FOLLOWING)
-        {
-            was_off_track = false;
-            last_turn = SEARCH_NONE;
-            recovery_count = 0;
-            barcode_scanning_active = false;
-            time_on_line_start = 0;
-            pid_init();
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        // Read sensors
-        line_state_t line_state = line_sensor_read();
-        uint32_t now = to_ms_since_boot(get_absolute_time());
-
-        // Check if on line
-        if (line_state == LINE_BLACK)
-        {
-            // ===== ON LINE: INSTANT CORRECTION TO RIGHT =====
-            // When sensor touches black line, immediately steer right to get back on white
-            // Use gentle correction to avoid overshooting the thin line
-            
-            // Track time on line for barcode mode
-            if (time_on_line_start == 0)
-            {
-                time_on_line_start = now;
-            }
-            
-            uint32_t time_on_line = now - time_on_line_start;
-            
-            // Activate barcode scan mode after stable tracking
-            if (!barcode_scanning_active && time_on_line > BARCODE_ENABLE_TIME_MS)
-            {
-                barcode_scanning_active = true;
-                barcode_mode_start_time = now;
-                pid_init(); // Reset PID for barcode mode
-                printf("[LINE_FOLLOW] Barcode scan mode ON\n");
-            }
-            
-            // Check barcode timeout
-            if (barcode_scanning_active)
-            {
-                uint32_t time_in_barcode = now - barcode_mode_start_time;
-                if (time_in_barcode > BARCODE_TIMEOUT_MS)
-                {
-                    barcode_scanning_active = false;
-                    time_on_line_start = now;
-                    printf("[LINE_FOLLOW] Barcode mode OFF (timeout)\n");
-                }
-            }
-            
-            float left_cmd, right_cmd;
-            
-            if (barcode_scanning_active)
-            {
-                // **BARCODE MODE: Go perfectly straight using encoder-based speed matching**
-                // Read current wheel speeds
-                float left_rpm = encoder_get_rpm_left();
-                float right_rpm = encoder_get_rpm_right();
-                
-                // Calculate speed difference (positive = left wheel faster)
-                float speed_error = left_rpm - right_rpm;
-                
-                // Apply deadband to avoid overcorrection
-                if (fabs(speed_error) < 5.0f)  // 5 RPM deadband
-                {
-                    speed_error = 0.0f;
-                }
-                
-                // Use PID to compute correction based on speed difference
-                float pid_output = pid_compute_heading(speed_error);
-                
-                // Scale PID output to motor correction range
-                // Speed error is in RPM units, scale appropriately
-                const float PID_TO_MOTOR_SCALE = 0.005f;  // Tunable scaling factor
-                float speed_correction = pid_output * PID_TO_MOTOR_SCALE;
-                
-                // Limit correction to prevent extreme motor speeds
-                const float MAX_SPEED_CORRECTION = 0.15f;
-                if (speed_correction > MAX_SPEED_CORRECTION) speed_correction = MAX_SPEED_CORRECTION;
-                if (speed_correction < -MAX_SPEED_CORRECTION) speed_correction = -MAX_SPEED_CORRECTION;
-                
-                // Apply correction to equalize wheel speeds
-                // If left wheel is faster (positive error), slow it down and speed up right
-                left_cmd = BASE_SPEED - speed_correction;
-                right_cmd = BASE_SPEED + speed_correction;
-            }
-            else
-            {
-                // **LINE DETECTED: Turn RIGHT gently to get back to white**
-                // Sensor on black = robot drifted left onto line
-                // Turn right (left wheel faster) to move back to white surface
-                // Use gentle correction to avoid overshooting the thin 1.5cm line
-                
-                const float CORRECTION_STRENGTH = 0.20f;  // Gentle 20% differential (tune 0.15-0.30)
-                
-                left_cmd = BASE_SPEED + CORRECTION_STRENGTH;   // Speed up left wheel
-                right_cmd = BASE_SPEED - CORRECTION_STRENGTH;  // Slow down right wheel
-                
-                // Mark that we're correcting (for state tracking)
-                was_off_track = false;
-                recovery_count = 0;
-                last_turn = SEARCH_RIGHT;  // Track correction direction
-            }
-
-            motor_set_speed(left_cmd, right_cmd);
-
-            // Update state machine context
-            float distance = encoder_get_distance_m();
-            if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-            {
-                state_machine_update_context(left_cmd, right_cmd, distance, 0.0f, true);
-                xSemaphoreGive(state_mutex);
-            }
-        }
-        else
-        {
-            // ===== OFF LINE: Search for it (original behavior) =====
-            was_off_track = true;
-            recovery_count = 0; // Reset recovery counter when off track
-            time_on_line_start = 0;
-            
-            if (barcode_scanning_active)
-            {
-                barcode_scanning_active = false;
-                printf("[LINE_FOLLOW] Barcode mode OFF (line lost)\n");
-            }
-
-            // SEARCH PATTERN: Always turn RIGHT (robot veers left, so search right)
-            last_turn = SEARCH_RIGHT; // Track that we're searching right
-
-            // Always search right (veer right) - left wheel faster, right wheel slower
-            float left_speed = BASE_SPEED;
-            float right_speed = BASE_SPEED - SEARCH_INTENSITY;  // 0.5 - 0.4 = 0.1
-
-            motor_set_speed(left_speed, right_speed);
-
-            float distance = encoder_get_distance_m();
-            if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-            {
-                state_machine_update_context(left_speed, right_speed, distance, 0.0f, false);
-                xSemaphoreGive(state_mutex);
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(LINE_FOLLOW_UPDATE_RATE_MS)); // 100Hz update - faster for narrow 1.5cm line
-    }
-}
-*/
 
 // ===== State monitor task =====
 void state_monitor_task(void *params)
