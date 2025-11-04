@@ -19,8 +19,8 @@
 #define MOTOR_R_DIR         11      // Right motor direction (GP11)
 
 // ---- Encoder Pins ----
-#define ENCODER_LEFT_PIN    27      // Left encoder (GP27 - Grove Port 5)
-#define ENCODER_RIGHT_PIN   6       // Right encoder (GP6 - Grove Port 6)
+#define ENCODER_LEFT_PIN    3       // Left encoder (GP3)
+#define ENCODER_RIGHT_PIN   6       // Right encoder (GP6)
 
 // ---- IMU Pins (LSM303DLHC) ----
 #define IMU_I2C_INST        i2c0    // I2C instance
@@ -36,6 +36,16 @@
 
 // ---- Button Pins ----
 #define CHG_DIRECTION_PIN   21      // Change direction button (GP21)
+
+// ---- Ultrasonic Sensor Pins ----
+#define ULTRASONIC_TRIG_PIN 5       // Ultrasonic trigger (GP5)
+#define ULTRASONIC_ECHO_PIN 4       // Ultrasonic echo (GP4)
+
+// ---- IR Sensor Pins (Line Detection/Barcode) ----
+#define IR_LEFT_DO_PIN      26      // Left IR digital out (GP26)
+#define IR_LEFT_AO_PIN      27      // Left IR analog out (GP27)
+#define IR_RIGHT_DO_PIN     7       // Right IR digital out (GP7)
+#define IR_RIGHT_AO_PIN     28      // Right IR analog out (GP28)
 
 // ============================================================================
 // ENCODER CONFIGURATION
