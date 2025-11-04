@@ -82,21 +82,17 @@
 #define PID_KD_SPEED        0.02f   // Derivative gain
 #define PID_SPEED_I_MAX     200.0f  // Anti-windup limit
 
-// Heading PID (tuned for narrow 1.5cm line at low speed)
-#define PID_KP_HEADING      0.8f    // Proportional gain (higher for faster response)
-#define PID_KI_HEADING      0.05f   // Integral gain (eliminate drift)
-#define PID_KD_HEADING      0.25f   // Derivative gain (damping)
-#define PID_HEADING_I_MAX   50.0f   // Anti-windup limit
+// Heading PID (instant calibration - integral term acts as automatic bias compensation)
+#define PID_KP_HEADING      0.40f   // Proportional gain (instant response to speed error)
+#define PID_KI_HEADING      0.050f  // Integral gain (auto-corrects persistent bias immediately)
+#define PID_KD_HEADING      0.12f   // Derivative gain (damping)
+#define PID_HEADING_I_MAX   80.0f   // Anti-windup limit (allows strong compensation)
 
 // ============================================================================
 // ROBOT BEHAVIOR CONFIGURATION
 // ============================================================================
 // Movement speeds (0.0 to 1.0)
-#define BASE_SPEED          0.6f    // Base speed increased to 60% for more stable encoder readings
-
-// Dynamic motor bias compensation parameters
-#define BIAS_LEARNING_RATE  0.08f   // How fast to adapt bias (increased from 0.05 for faster learning)
-#define BIAS_MAX_ADJUSTMENT 0.30f   // Maximum bias adjustment (increased from 0.25 to ±30%)
+#define BASE_SPEED          0.4f    // Base speed at 40% - adjust as needed (0.3-0.8 typical)
 
 #define TURN_SPEED          0.20f   // Speed during 90° turns
 
