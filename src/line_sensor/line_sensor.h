@@ -37,4 +37,17 @@ void line_sensor_set_threshold(uint16_t threshold);
 // For multi-sensor array, this would return weighted position
 float line_sensor_get_error(void);
 
+// ---- Line Following Control ----
+// Smooth edge-following algorithm with exponential moving average
+// Returns motor commands (left, right) based on sensor reading
+typedef struct {
+    float left_speed;
+    float right_speed;
+} motor_commands_t;
+
+motor_commands_t line_sensor_compute_motor_commands(void);
+
+// Reset line following state (call when entering/exiting line following mode)
+void line_sensor_reset_state(void);
+
 #endif

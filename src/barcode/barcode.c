@@ -1,48 +1,79 @@
-// ===============================================
-//  Module: Barcode Decoder (Code-39)
-//  Description: Edge-based barcode scanning for junction commands
-//  Based on: Edge tracker + Code-39 decoder (FORWARD ONLY)
-// ===============================================
+/**
+ * @file barcode.c
+ * @brief Code-39 Barcode Decoder Implementation (FORWARD ONLY)
+ * Improved edge tracker + Code-39 decoder with visual START/DATA/STOP display
+ */
+
 #include "barcode.h"
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
-// All configuration moved to robot_config.h
+// Configuration from robot_config.h
+#define IR_PIN BARCODE_IR_DO_PIN
+#define SAMPLE_MS BARCODE_SAMPLE_MS
+#define VERIFY_MS BARCODE_VERIFY_MS
+#define BAR_IS_LOW BARCODE_BAR_IS_LOW
+#define SCAN_RESET_MS BARCODE_RESET_MS
+#define MAX_MESSAGE_LEN BARCODE_MAX_LEN
 
-// ===== Edge detection state =====
-typedef enum { EDGE_NONE=0, EDGE_RISE, EDGE_FALL } edge_t;
+// Debug output control
+#define DEBUG_SEGMENTS     1       // Show each segment (Bar/Space + duration)
+#define DEBUG_WINDOW_DUMP  1       // Dump 9-segment window & classification
 
-static volatile uint8_t  raw_level, stable_level, prev_stable_level;
-static volatile uint32_t last_change_ms;
-static volatile edge_t   last_edge = EDGE_NONE;
+// Scanner state machine
+typedef enum {
+    SCAN_IDLE = 0,    // Waiting for start delimiter (*)
+    SCAN_READ         // Reading barcode data
+} scan_state_t;
 
-// ===== Segment structure =====
+// Barcode segment (bar or space with duration)
 typedef struct { 
-    uint16_t dur_ms; 
-    uint8_t is_bar; 
+    uint16_t dur_ms;   // Duration in milliseconds
+    uint8_t is_bar;    // 1 if bar (black), 0 if space (white)
 } seg_t;
 
+// Edge detection state
+static volatile uint8_t raw_level = 0;
+static volatile uint8_t stable_level = 0;
+static volatile uint8_t prev_stable_level = 0;
+static volatile uint32_t last_change_ms = 0;
+static volatile uint32_t last_activity_ms = 0;
+static uint32_t last_status_ms = 0;
+
+// Segment storage (9-element sliding window)
 static seg_t win[9];
-static int   win_len = 0;
+static int win_len = 0;
 
-// ===== Scanner state =====
-typedef enum { SCAN_IDLE=0, SCAN_READ } scan_state_t;
-
+// Decoder state
 static scan_state_t scan_state = SCAN_IDLE;
-static char         decoded_msg[BARCODE_MAX_LEN];
-static uint32_t     last_activity_ms = 0;
-static bool         scanning_active = false;
+static char decoded_msg[MAX_MESSAGE_LEN];
+static bool new_result_available = false;
+static barcode_result_t last_result;
 
+// Callback support
 static barcode_callback_t user_callback = NULL;
+static bool scanning_enabled = false;
 
-// ===== Code-39 pattern table =====
+// Speed control support - track narrow durations for autonomous speed adjustment
+#define NARROW_HISTORY_SIZE 10
+static uint16_t narrow_durations[NARROW_HISTORY_SIZE];
+static int narrow_count = 0;
+static float module_width_m = 0.0f;  // Calibrated module width in meters
+
+// Timer for periodic updates
+static struct repeating_timer timer;
+static bool reader_active = false;
+
+// Forward declarations
+static const char* barcode_command_to_string(barcode_command_t cmd);
+
+// Code-39 pattern table
 typedef struct { char ch; const char *pat; } c39_pat_t;
 static const c39_pat_t C39[] = {
-    // Digits
     {'0',"nnnwwnwnn"}, {'1',"wnnwnnnnw"}, {'2',"nnwwnnnnw"}, {'3',"wnwwnnnnn"},
     {'4',"nnnwwnnnw"}, {'5',"wnnwwnnnn"}, {'6',"nnwwwnnnn"}, {'7',"nnnwnnwnw"},
     {'8',"wnnwnnwnn"}, {'9',"nnwwnnwnn"},
-    // Letters A–Z
     {'A',"wnnnnwnnw"}, {'B',"nnwnnwnnw"}, {'C',"wnwnnwnnn"}, {'D',"nnnnwwnnw"},
     {'E',"wnnnwwnnn"}, {'F',"nnwnwwnnn"}, {'G',"nnnnnwwnw"}, {'H',"wnnnnwwnn"},
     {'I',"nnwnnwwnn"}, {'J',"nnnnwwwnn"},
@@ -51,19 +82,13 @@ static const c39_pat_t C39[] = {
     {'S',"nnwnnnwwn"}, {'T',"nnnnwnwwn"},
     {'U',"wwnnnnnnw"}, {'V',"nwwnnnnnw"}, {'W',"wwwnnnnnn"}, {'X',"nwnnwnnnw"},
     {'Y',"wwnnwnnnn"}, {'Z',"nwwnwnnnn"},
-    // Punctuation
     {'-',"nwnnnnwnw"}, {'.',"wwnnnnwnn"}, {' ',"nwwnnnwnn"},
-    {'*',"nwnnwnwnn"}, {'$',"nwnwnwnnn"}, {'/',"nwnwnnnwn"},
-    {'+', "nwnnnwnwn"}, {'%',"nnnwnwnwn"},
+    {'*',"nwnnwnwnn"},
     {0, NULL}
 };
 
-// ===== Helper functions =====
-static inline void reset_window(void) { 
-    win_len = 0; 
-}
-
-static inline uint16_t pat_to_mask(const char *p) {
+// Convert pattern to mask
+static uint16_t pat_to_mask(const char *p) {
     uint16_t m = 0;
     for (int i=0; i<9 && p[i]; ++i) 
         if (p[i]=='w'||p[i]=='W') 
@@ -71,42 +96,36 @@ static inline uint16_t pat_to_mask(const char *p) {
     return m;
 }
 
-static inline uint16_t build_mask_top3_from(const seg_t a[9]) {
+// Build mask from top-3 widest segments
+static uint16_t build_mask_top3(const seg_t a[9]) {
     int idx[9]; 
     uint16_t d[9];
-    
-    for (int k=0; k<9; k++) { 
-        idx[k] = k; 
-        d[k] = a[k].dur_ms; 
+    for (int k=0; k<9; k++){ 
+        idx[k]=k; 
+        d[k]=a[k].dur_ms; 
     }
     
-    // Partial selection sort - bring top 3 to front
+    // Partial selection sort - bring 3 largest to front
     for (int pos=0; pos<3; ++pos) {
         int max_i = pos;
         for (int j=pos+1; j<9; ++j) 
             if (d[j] > d[max_i]) 
                 max_i = j;
-        
         if (max_i != pos) {
-            uint16_t td = d[pos]; 
-            d[pos] = d[max_i]; 
-            d[max_i] = td;
-            
-            int ti = idx[pos];    
-            idx[pos] = idx[max_i]; 
-            idx[max_i] = ti;
+            uint16_t td=d[pos]; d[pos]=d[max_i]; d[max_i]=td;
+            int ti=idx[pos]; idx[pos]=idx[max_i]; idx[max_i]=ti;
         }
     }
     
-    // Build 9-bit mask (MSB = first element; 1 = wide)
+    // Build 9-bit mask
     uint16_t mask9 = 0;
     mask9 |= (1u << (8 - idx[0]));
     mask9 |= (1u << (8 - idx[1]));
     mask9 |= (1u << (8 - idx[2]));
-    
     return mask9;
 }
 
+// Lookup character from mask
 static bool lookup_mask(uint16_t mask9, char *out) {
     for (int i=0; C39[i].ch; ++i) {
         if (pat_to_mask(C39[i].pat) == mask9) { 
@@ -117,16 +136,19 @@ static bool lookup_mask(uint16_t mask9, char *out) {
     return false;
 }
 
-static inline void reset_scan_state(const char *why) {
+// Reset window
+static void reset_window(void) { 
+    win_len = 0; 
+}
+
+// Reset scan state
+static void reset_scan_state(void) {
     reset_window();
     scan_state = SCAN_IDLE;
     decoded_msg[0] = '\0';
-    if (why) {
-        printf("[BARCODE] Reset: %s\n", why);
-    }
 }
 
-// ===== Segment processing =====
+// Process segment
 static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
     if (dur_ms == 0) return;
 
@@ -137,6 +159,7 @@ static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
         // Enforce alternation: B,S,B,S,...,B
         bool expect_bar = ((win_len % 2) == 0);
         if (expect_bar != ended_is_bar) {
+            // Alternation broke: resync. Start new window if this is a BAR.
             reset_window();
             if (ended_is_bar) { 
                 win[0] = (seg_t){dur_ms, 1}; 
@@ -146,76 +169,195 @@ static void push_segment(uint16_t dur_ms, bool ended_is_bar) {
         }
     }
 
-    // Append segment
+    // Append segment to window
     win[win_len++] = (seg_t){dur_ms, (uint8_t)ended_is_bar};
+    
+#if DEBUG_SEGMENTS
+    printf("SEG %d: %c %u ms\n", win_len, ended_is_bar ? 'B' : 'S', (unsigned)dur_ms);
+#endif
     
     if (win_len < 9) return;
 
-    // 9 segments collected → classify
+    // 9 segments collected -> classify FORWARD ONLY
     char ch = 0;
-    uint16_t mask = build_mask_top3_from(win);
+    uint16_t mask = build_mask_top3(win);
+    
+    // Track narrow durations for speed control (only spaces and bars that are narrow)
+    // Find narrowest 6 elements (should be the 'n' narrow ones in Code-39)
+    uint16_t sorted_durs[9];
+    for (int k = 0; k < 9; k++) sorted_durs[k] = win[k].dur_ms;
+    // Simple bubble sort for 9 elements
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8 - i; j++) {
+            if (sorted_durs[j] > sorted_durs[j+1]) {
+                uint16_t tmp = sorted_durs[j];
+                sorted_durs[j] = sorted_durs[j+1];
+                sorted_durs[j+1] = tmp;
+            }
+        }
+    }
+    // Average the narrowest 6 (excluding the 3 wide ones)
+    uint32_t narrow_sum = 0;
+    for (int k = 0; k < 6; k++) narrow_sum += sorted_durs[k];
+    uint16_t avg_narrow = (uint16_t)(narrow_sum / 6);
+    
+    // Store in circular buffer
+    if (narrow_count < NARROW_HISTORY_SIZE) {
+        narrow_durations[narrow_count++] = avg_narrow;
+    } else {
+        // Shift and add new
+        for (int k = 0; k < NARROW_HISTORY_SIZE - 1; k++) {
+            narrow_durations[k] = narrow_durations[k + 1];
+        }
+        narrow_durations[NARROW_HISTORY_SIZE - 1] = avg_narrow;
+    }
+    
+#if DEBUG_WINDOW_DUMP
+    printf("WIN9: ");
+    for (int k = 0; k < 9; k++) {
+        printf("%c%u ", win[k].is_bar ? 'B' : 'S', win[k].dur_ms);
+    }
+    printf("| W/n: ");
+    for (int i = 0; i < 9; i++) {
+        bool is_wide = (mask & (1u << (8 - i))) != 0;
+        printf("%c", is_wide ? 'W' : 'n');
+    }
+    printf(" | narrow_avg=%u -> ", avg_narrow);
+#endif
+    
     bool ok = lookup_mask(mask, &ch);
     reset_window();
     
-    if (!ok) return;
+    if (!ok) {
+#if DEBUG_WINDOW_DUMP
+        printf("✗ (no match)\n");
+#endif
+        return;
+    }
 
-    // State machine
+    // Handle start delimiter
     if (scan_state == SCAN_IDLE) {
         if (ch == '*') {
             decoded_msg[0] = '\0';
             scan_state = SCAN_READ;
-            printf("[BARCODE] START detected\n");
+            printf("\n");
+            printf("╔════════════════════════════════════════════╗\n");
+            printf("║  🔍 BARCODE SCAN STARTED                   ║\n");
+            printf("╠════════════════════════════════════════════╣\n");
+            printf("║  START: *                                  ║\n");
+            printf("╚════════════════════════════════════════════╝\n");
         }
         return;
     }
 
-    // SCAN_READ state
+    // Handle stop delimiter and payload characters
     if (ch == '*') {
-        printf("[BARCODE] STOP detected\n");
-        printf("[BARCODE] Decoded: \"%s\"\n", decoded_msg);
+        printf("╔════════════════════════════════════════════╗\n");
+        printf("║  STOP: *                                   ║\n");
+        printf("╠════════════════════════════════════════════╣\n");
+        printf("║  ✅ COMPLETE BARCODE: \"%s\"%*s║\n", 
+               decoded_msg, (int)(24 - strlen(decoded_msg)), "");
+        printf("╚════════════════════════════════════════════╝\n");
+        printf("\n");
         
-        // Trigger callback
-        if (user_callback) {
-            barcode_command_t cmd = barcode_parse_command(decoded_msg);
-            user_callback(decoded_msg, cmd);
+        // Store result
+        strncpy(last_result.decoded_string, decoded_msg, MAX_MESSAGE_LEN-1);
+        last_result.decoded_string[MAX_MESSAGE_LEN-1] = '\0';
+        last_result.command = barcode_parse_command(decoded_msg);
+        last_result.valid = (last_result.command != CMD_NONE);
+        last_result.timestamp_ms = to_ms_since_boot(get_absolute_time());
+        new_result_available = true;
+        
+        printf("[BARCODE] Command: %s\n\n", barcode_command_to_string(last_result.command));
+        
+        // Call callback if registered
+        if (user_callback && scanning_enabled) {
+            user_callback(last_result.decoded_string, last_result.command);
         }
         
         scan_state = SCAN_IDLE;
         return;
     }
 
-    // Append character
+    // Append payload character
     size_t L = strlen(decoded_msg);
-    if (L + 2 < sizeof(decoded_msg)) { 
-        decoded_msg[L] = ch; 
-        decoded_msg[L+1] = '\0'; 
+    if (L + 2 < sizeof(decoded_msg)) {
+        decoded_msg[L] = ch;
+        decoded_msg[L + 1] = '\0';
     }
+    
+#if DEBUG_WINDOW_DUMP
+    printf("'%c'  DATA=\"%s\"\n", ch, decoded_msg);
+#endif
 }
 
-// ===== Timer callback (1kHz sampling) =====
-static bool timer_cb(struct repeating_timer *t) {
-    if (!scanning_active) return true;
+// Public API Implementation
+
+void barcode_init(void) {
+    gpio_init(IR_PIN);
+    gpio_set_dir(IR_PIN, GPIO_IN);
+    gpio_pull_up(IR_PIN);
+
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    raw_level = stable_level = prev_stable_level = gpio_get(IR_PIN);
+    last_change_ms = now_ms;
+    last_activity_ms = now_ms;
+    last_status_ms = now_ms;
     
-    raw_level = gpio_get(BARCODE_IR_DO_PIN);
+    reset_scan_state();
+    new_result_available = false;
+    
+    printf("\n╔════════════════════════════════════════════╗\n");
+    printf("║  Barcode Reader Initialized (Code-39)     ║\n");
+    printf("║  IR Sensor: GPIO %d                        ║\n", IR_PIN);
+    printf("║  Mode: FORWARD ONLY                        ║\n");
+    printf("║  Timeout: %d ms (inactivity reset)        ║\n", SCAN_RESET_MS);
+    printf("╚════════════════════════════════════════════╝\n\n");
+}
+
+void barcode_update(void) {
+    if (!scanning_enabled) return;
+    
+    raw_level = gpio_get(IR_PIN);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    static uint8_t  pending_level = 0xFF;
+    static uint8_t pending_level = 0xFF;
     static uint32_t pending_since = 0;
 
-    // Debounce logic
+    // Quiet edge detection
     if (raw_level == stable_level) { 
         pending_level = 0xFF; 
-        return true; 
+        
+        // Check timeout even when no edges are happening
+        // This handles cases where we're stuck in a long segment
+        if ((now_ms - last_change_ms) > SCAN_RESET_MS) {
+            if (scan_state != SCAN_IDLE) {
+                printf("\n╔════════════════════════════════════════════╗\n");
+                printf("║  ⏱️  SCAN TIMEOUT (>%dms no edges)        ║\n", SCAN_RESET_MS);
+                printf("║  Partial data: \"%s\"%*s║\n", 
+                       decoded_msg, (int)(27 - strlen(decoded_msg)), "");
+                printf("║  Window: %d/9 segments                     ║\n", win_len);
+                printf("║  Resetting scanner...                      ║\n");
+                printf("╚════════════════════════════════════════════╝\n\n");
+                reset_scan_state();
+                last_activity_ms = now_ms;
+            } else if (win_len > 0) {
+                printf("[BARCODE] Timeout - clearing partial window (%d segments)\n", win_len);
+                reset_scan_state();
+                last_activity_ms = now_ms;
+            }
+        }
+        
+        return; 
     }
     
     if (pending_level != raw_level) { 
         pending_level = raw_level; 
         pending_since = now_ms; 
-        return true; 
+        return; 
     }
     
-    if ((now_ms - pending_since) < BARCODE_VERIFY_MS) 
-        return true;
+    if ((now_ms - pending_since) < VERIFY_MS) return;
 
     // Accept change
     prev_stable_level = stable_level;
@@ -224,9 +366,9 @@ static bool timer_cb(struct repeating_timer *t) {
     uint32_t width_ms = (pending_since > last_change_ms) ? 
                         (pending_since - last_change_ms) : 0;
 
-    // Map ended level to bar/space
+    // Determine if ended segment was bar or space
     bool ended_was_low = (stable_level > prev_stable_level);
-    bool ended_is_bar  = BARCODE_BAR_IS_LOW ? ended_was_low : !ended_was_low;
+    bool ended_is_bar = BAR_IS_LOW ? ended_was_low : !ended_was_low;
 
     if (width_ms > 0 && width_ms < 65535) {
         push_segment((uint16_t)width_ms, ended_is_bar);
@@ -234,79 +376,137 @@ static bool timer_cb(struct repeating_timer *t) {
     }
 
     last_change_ms = pending_since;
+    
+#ifdef BARCODE_STATUS_MS
+    #if BARCODE_STATUS_MS > 0
+    // Periodic status update (optional)
+    if (scanning_enabled && (now_ms - last_status_ms) > BARCODE_STATUS_MS) {
+        printf("[BARCODE] Status: %s | Last edge: %lu ms ago | Window: %d/9 | IR: %d\n",
+               scan_state == SCAN_IDLE ? "IDLE" : "READING",
+               (unsigned long)(now_ms - last_change_ms),
+               win_len,
+               stable_level);
+        last_status_ms = now_ms;
+    }
+    #endif
+#endif
+}
+
+bool barcode_get_result(barcode_result_t *result) {
+    if (!new_result_available || !result) return false;
+    
+    *result = last_result;
+    new_result_available = false;
     return true;
 }
 
-static struct repeating_timer barcode_timer;
-
-// ===== Public API =====
-void barcode_init(void) {
-    gpio_init(BARCODE_IR_DO_PIN);
-    gpio_set_dir(BARCODE_IR_DO_PIN, GPIO_IN);
-    gpio_pull_up(BARCODE_IR_DO_PIN);
-
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    raw_level = stable_level = prev_stable_level = gpio_get(BARCODE_IR_DO_PIN);
-    last_change_ms = now_ms;
-    last_activity_ms = now_ms;
-    
-    decoded_msg[0] = '\0';
-    
-    printf("[BARCODE] Initialized on GPIO %d\n", BARCODE_IR_DO_PIN);
+void barcode_reset(void) {
+    reset_scan_state();
+    new_result_available = false;
 }
 
-void barcode_start_scanning(void) {
-    if (scanning_active) return;
+barcode_command_t barcode_parse_command(const char *str) {
+    if (!str) return CMD_NONE;
     
-    scanning_active = true;
-    reset_scan_state("start scanning");
-    add_repeating_timer_ms(-BARCODE_SAMPLE_MS, timer_cb, NULL, &barcode_timer);
+    char upper[32];
+    int i;
+    for (i = 0; i < 31 && str[i]; i++) {
+        upper[i] = toupper((unsigned char)str[i]);
+    }
+    upper[i] = '\0';
     
-    printf("[BARCODE] Scanning started\n");
-}
-
-void barcode_stop_scanning(void) {
-    if (!scanning_active) return;
+    // Trim whitespace
+    while (i > 0 && isspace((unsigned char)upper[i-1])) {
+        upper[--i] = '\0';
+    }
     
-    scanning_active = false;
-    cancel_repeating_timer(&barcode_timer);
-    
-    printf("[BARCODE] Scanning stopped\n");
-}
-
-void barcode_set_callback(barcode_callback_t callback) {
-    user_callback = callback;
-}
-
-const char* barcode_get_last_decoded(void) {
-    return decoded_msg;
-}
-
-barcode_command_t barcode_parse_command(const char* str) {
-    if (!str || !str[0]) return CMD_NONE;
-    
-    // Match against expected command strings
-    if (strcmp(str, "LEFT") == 0 || strcmp(str, "L") == 0) 
-        return CMD_LEFT;
-    if (strcmp(str, "RIGHT") == 0 || strcmp(str, "R") == 0) 
-        return CMD_RIGHT;
-    if (strcmp(str, "STOP") == 0 || strcmp(str, "S") == 0) 
-        return CMD_STOP;
-    if (strcmp(str, "FORWARD") == 0 || strcmp(str, "F") == 0) 
-        return CMD_FORWARD;
+    if (strcmp(upper, "LEFT") == 0) return CMD_LEFT;
+    if (strcmp(upper, "RIGHT") == 0) return CMD_RIGHT;
+    if (strcmp(upper, "STOP") == 0) return CMD_STOP;
+    if (strcmp(upper, "UTURN") == 0) return CMD_UTURN;
+    if (strcmp(upper, "U-TURN") == 0) return CMD_UTURN;
+    if (strcmp(upper, "U TURN") == 0) return CMD_UTURN;
     
     return CMD_NONE;
 }
 
-void barcode_update(void) {
-    // Check for inactivity timeout
-    if (!scanning_active) return;
-    
-    uint32_t tnow = to_ms_since_boot(get_absolute_time());
-    if ((tnow - last_activity_ms) > BARCODE_RESET_MS) {
-        if (scan_state != SCAN_IDLE || win_len > 0) {
-            reset_scan_state("inactivity timeout");
-        }
-        last_activity_ms = tnow;
+const char* barcode_command_to_string(barcode_command_t cmd) {
+    switch (cmd) {
+        case CMD_NONE: return "NONE";
+        case CMD_LEFT: return "LEFT";
+        case CMD_RIGHT: return "RIGHT";
+        case CMD_STOP: return "STOP";
+        case CMD_UTURN: return "U-TURN";
+        default: return "INVALID";
     }
+}
+
+// Callback and scanning control functions
+void barcode_set_callback(barcode_callback_t callback) {
+    user_callback = callback;
+}
+
+void barcode_start_scanning(void) {
+    scanning_enabled = true;
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    last_activity_ms = now_ms;
+    last_status_ms = now_ms;
+    printf("[BARCODE] 🟢 Scanning ENABLED - Waiting for barcode...\n\n");
+}
+
+void barcode_stop_scanning(void) {
+    scanning_enabled = false;
+    reset_scan_state();
+    printf("[BARCODE] 🔴 Scanning DISABLED\n");
+}
+
+// ===== Speed Control API =====
+
+// Get average narrow duration from recent scans (ms)
+float barcode_get_avg_narrow_duration_ms(void) {
+    if (narrow_count == 0) return 0.0f;
+    
+    uint32_t sum = 0;
+    for (int i = 0; i < narrow_count; i++) {
+        sum += narrow_durations[i];
+    }
+    return (float)sum / (float)narrow_count;
+}
+
+// Set calibrated module width (call once during calibration)
+void barcode_set_module_width_m(float width_m) {
+    module_width_m = width_m;
+    printf("[BARCODE] Module width set to %.5f m (%.2f mm)\n", width_m, width_m * 1000.0f);
+}
+
+// Get calibrated module width
+float barcode_get_module_width_m(void) {
+    return module_width_m;
+}
+
+// Compute target RPM for desired narrow duration (ms)
+// Returns 0 if not calibrated or invalid input
+float barcode_compute_target_rpm(float desired_narrow_ms) {
+    if (module_width_m <= 0.0f || desired_narrow_ms <= 0.0f) {
+        return 0.0f;
+    }
+    
+    // v_target = module_width / (desired_narrow / 1000)
+    float v_target_mps = module_width_m * 1000.0f / desired_narrow_ms;
+    
+    // rpm = v * 60 / wheel_circumference
+    float rpm_target = v_target_mps * 60.0f / WHEEL_CIRCUM_M;
+    
+    return rpm_target;
+}
+
+// Clear narrow duration history
+void barcode_reset_narrow_history(void) {
+    narrow_count = 0;
+    printf("[BARCODE] Narrow duration history cleared\n");
+}
+
+// Get number of narrow samples collected
+int barcode_get_narrow_sample_count(void) {
+    return narrow_count;
 }

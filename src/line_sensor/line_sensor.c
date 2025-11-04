@@ -50,3 +50,57 @@ float line_sensor_get_error(void) {
         return last_error;
     }
 }
+
+// ===============================================
+//  Line Following Control Implementation
+// ===============================================
+
+// Smoothing state for sine-wave motion
+static float steering_smooth = 0.0f;
+
+// Tuning parameters for responsive yet smooth motion within 2cm line gap
+#define SMOOTH_ALPHA 0.20f          // Faster response but still smooth (0.15-0.25)
+#define CORRECTION_STRENGTH 0.06f   // Moderate 6% differential - reactive but controlled (0.05-0.08)
+
+void line_sensor_reset_state(void) {
+    steering_smooth = 0.0f;
+}
+
+motor_commands_t line_sensor_compute_motor_commands(void) {
+    motor_commands_t commands;
+    
+    // Read line sensor
+    line_state_t line_state = line_sensor_read();
+    
+    // Compute target steering value based on sensor reading
+    float steering_target;
+    
+    if (line_state == LINE_BLACK) {
+        // BLACK LINE: Want to turn RIGHT
+        // Positive steering = turn right (left wheel faster)
+        steering_target = +1.0f;
+    } else {
+        // WHITE SURFACE: Want to turn LEFT
+        // Negative steering = turn left (right wheel faster)
+        steering_target = -1.0f;
+    }
+    
+    // Apply exponential moving average (low-pass filter) for smooth sine-wave motion
+    // This gradually transitions between left and right instead of sharp switches
+    steering_smooth = steering_smooth * (1.0f - SMOOTH_ALPHA) + steering_target * SMOOTH_ALPHA;
+    
+    // Apply normalized steering to motor commands
+    // steering_smooth ranges from -1.0 (left) to +1.0 (right)
+    float correction = steering_smooth * CORRECTION_STRENGTH;
+    
+    commands.left_speed = BASE_SPEED + correction;   // Positive correction speeds up left (turn right)
+    commands.right_speed = BASE_SPEED - correction;  // Positive correction slows down right (turn right)
+    
+    // Clamp to safe range
+    if (commands.left_speed < 0.1f) commands.left_speed = 0.1f;
+    if (commands.left_speed > 1.0f) commands.left_speed = 1.0f;
+    if (commands.right_speed < 0.1f) commands.right_speed = 0.1f;
+    if (commands.right_speed > 1.0f) commands.right_speed = 1.0f;
+    
+    return commands;
+}
