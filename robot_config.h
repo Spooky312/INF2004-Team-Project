@@ -125,7 +125,7 @@
 
 // ---- Enable/Disable Features ----
 #define HAVE_CHG_DIRECTION  1       // Set to 1 to enable direction change button
-#define ENABLE_WIFI_MQTT    0       // Set to 1 to enable WiFi/MQTT telemetry
+#define ENABLE_WIFI_MQTT    1       // Set to 1 to enable WiFi/MQTT telemetry
 #define ENABLE_DEBUG_LEDS   1       // Set to 1 to enable debug LED indicators
 
 // ============================================================================

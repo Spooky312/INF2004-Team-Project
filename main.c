@@ -17,8 +17,11 @@
 #include "encoder.h"
 #include "imu.h"
 #include "pid.h"
-#include "wifi_mqtt.h"
 #include "debug_led.h"
+
+// Updated include: use new thread-safe network manager
+#include "drivers/networking/networkManager.h"
+#include "drivers/networking/mqtt/mqtt.h"
 
 #if HAVE_CHG_DIRECTION
 #include "chg_direction.h"
@@ -235,6 +238,8 @@ void telemetry_task(__unused void* params)
     uint32_t counter = 0;
     
     printf("[TELEM] Task loop starting\n");
+    
+    static int mqtt_fail_count = 0;
 
     for (;;)
     {
@@ -251,7 +256,7 @@ void telemetry_task(__unused void* params)
         float heading_raw, heading_filt;
         imu_get_heading_deg(&heading_raw, &heading_filt);
 
-        // Print telemetry every TELEMETRY_DEBUG_INTERVAL iterations (from robot_config_demo1.h)
+        // Print telemetry every TELEMETRY_DEBUG_INTERVAL iterations (from robot_config.h)
         if (counter % TELEMETRY_DEBUG_INTERVAL == 0)
         {
             char msg[256];
@@ -261,55 +266,36 @@ void telemetry_task(__unused void* params)
                      "\"ticks_l\":%lu,\"ticks_r\":%lu}",
                      rpm_l, rpm_r, dist, target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
 
-            printf("Telemetry: %s\n", msg);
+            printf("[TELEM] %s\n", msg);
             
             // ENCODER DIAGNOSTIC - if ticks are 0, encoders aren't working!
             if (ticks_l == 0 && ticks_r == 0) {
-                printf("[WARN] No encoder ticks detected! Check connections:\n");
+                printf("[TELEM] [WARN] No encoder ticks detected! Check connections:\n");
                 printf("       Left encoder: GP%d\n", ENCODER_LEFT_PIN);
                 printf("       Right encoder: GP%d\n", ENCODER_RIGHT_PIN);
             }
+            
+            // Publish via MQTT if connected
+            if (mqtt_app_is_connected()) {
+                if (mqtt_app_publish("pico/telemetry", msg, 0, 0)) {
+                    printf("[TELEM] ✅ Published to MQTT topic: pico/telemetry\n");
+                    mqtt_fail_count = 0;
+                } else {
+                    mqtt_fail_count++;
+                    printf("[TELEM] ⚠️ MQTT publish failed\n");
+                }
+            } else {
+                mqtt_fail_count++;
+                if (mqtt_fail_count <= 3 || mqtt_fail_count % 10 == 0) {
+                    printf("[TELEM] ❌ MQTT not connected - message not published (fail #%d)\n", mqtt_fail_count);
+                }
+            }
         }
         
-        // Only publish if WiFi/MQTT available
-        // wifi_mqtt_publish("pico/telemetry", msg);  // Disabled for testing
-
         // Blink status LED (heartbeat)
         debug_led_blink(STATUS_LED_PIN, 20);
 
         vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_TASK_PERIOD_MS));
-    }
-}
-
-// -----------------------------------------------
-// Wi-Fi and MQTT Task
-// -----------------------------------------------
-static void wifi_task(void *p)
-{
-    wifi_connect_init();
-
-    while (!wifi_is_connected())
-    {
-        printf("Connecting to Wi-Fi...\n");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-
-    printf("Wi-Fi connected.\n");
-    debug_led_set(13, true); // Wi-Fi LED solid ON
-
-    mqtt_init();
-    while (!mqtt_is_connected())
-    {
-        printf("Connecting to MQTT broker...\n");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-
-    printf("MQTT connected.\n");
-
-    for (;;)
-    {
-        mqtt_loop();
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -363,10 +349,10 @@ int main(void)
 
     printf("\n[INFO] Creating FreeRTOS tasks...\n");
 #if ENABLE_WIFI_MQTT
-    printf("      Creating WiFi task...\n");
-    xTaskCreate(wifi_task, "WiFi", WIFI_TASK_STACK_SIZE / sizeof(StackType_t), NULL, WIFI_TASK_PRIORITY, NULL);
+    printf("      Creating Network Manager task...\n");
+    xTaskCreate(network_manager_task, "NetMgr", WIFI_TASK_STACK_SIZE / sizeof(StackType_t), NULL, WIFI_TASK_PRIORITY, NULL);
 #else
-    printf("      WiFi/MQTT DISABLED (set ENABLE_WIFI_MQTT=1 in robot_config_demo1.h to enable)\n");
+    printf("      WiFi/MQTT DISABLED (set ENABLE_WIFI_MQTT=1 in robot_config.h to enable)\n");
 #endif
     printf("      Creating PID task...\n");
     xTaskCreate(pid_task, "PID", PID_TASK_STACK_SIZE / sizeof(StackType_t), NULL, PID_TASK_PRIORITY, NULL);
