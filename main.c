@@ -241,24 +241,28 @@ void turn_task(void *params)
 //   - Dynamically learn motor bias to compensate for mechanical differences
 void line_follow_task(void *params)
 {
-    printf("[LINE_FOLLOW] Task started - PID TEST MODE with DYNAMIC BIAS LEARNING\n");
+    printf("[LINE_FOLLOW] Task started - ENCODER-BASED SPEED MATCHING\n");
     printf("[PID_TEST] Press emergency stop (GP20) to halt\n");
 
-    // Reset PID state (includes bias learning reset)
+    // Reset PID state
     pid_init();
 
     uint32_t debug_counter = 0;
     
     // Print PID configuration at startup
-    printf("\n========== PID CALIBRATION TEST ==========\n");
-    printf("Base Speed: %.2f\n", BASE_SPEED);
-    printf("Dynamic Bias Learning: ENABLED\n");
-    printf("  Learning Rate: %.3f\n", BIAS_LEARNING_RATE);
-    printf("  Max Adjustment: ±%.2f (±%.0f%%)\n", BIAS_MAX_ADJUSTMENT, BIAS_MAX_ADJUSTMENT * 100);
+    printf("\n========== ENCODER-BASED SPEED MATCHING ==========\n");
+    printf("Base Speed: %.2f (%.0f%%)\n", BASE_SPEED, BASE_SPEED * 100);
+    printf("Control Strategy: Pure PID with integral feedforward\n");
+    printf("  - Target: Left RPM = Right RPM (equal speed = straight)\n");
+    printf("  - P term: Instant response to current speed error\n");
+    printf("  - I term: Accumulates to compensate motor voltage curve differences\n");
+    printf("  - D term: Dampens oscillations and overshoots\n");
+    printf("  - Integral becomes PERMANENT feedforward after convergence\n");
     printf("PID Gains: Kp=%.2f Ki=%.3f Kd=%.2f\n", PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING);
-    printf("PID Scale: %.4f | Max Correction: 0.12\n", 0.008f);
-    printf("Deadband: 3.0 RPM\n");
-    printf("==========================================\n\n");
+    printf("Integral Max: %.0f (prevents windup)\n", PID_HEADING_I_MAX);
+    printf("PID Scale: %.3f (converts PID output to motor correction)\n", 0.015f);
+    printf("RPM Filter: Alpha=%.2f | Deadband: 1.0 RPM\n", 0.3f);
+    printf("==================================================\n\n");
 
     while (1)
     {
@@ -291,51 +295,40 @@ void line_follow_task(void *params)
             continue;
         }
 
-        // **PID TEST: Go straight using encoder-based speed matching with dynamic bias**
+        // **ENCODER-BASED SPEED MATCHING: Use RPM feedback to equalize wheel speeds**
         // Read current wheel speeds
         float left_rpm = encoder_get_rpm_left();
         float right_rpm = encoder_get_rpm_right();
         
+        // Apply EMA filter to reduce encoder noise
+        static float left_rpm_filtered = 0.0f;
+        static float right_rpm_filtered = 0.0f;
+        const float ALPHA = 0.3f;  // Filter coefficient (lower = more smoothing)
+        left_rpm_filtered = left_rpm_filtered * (1.0f - ALPHA) + left_rpm * ALPHA;
+        right_rpm_filtered = right_rpm_filtered * (1.0f - ALPHA) + right_rpm * ALPHA;
+        
         // Calculate average speed and speed difference
-        float avg_rpm = (left_rpm + right_rpm) / 2.0f;
-        float speed_error = left_rpm - right_rpm;
+        float avg_rpm = (left_rpm_filtered + right_rpm_filtered) / 2.0f;
+        float speed_error = left_rpm_filtered - right_rpm_filtered;
         float speed_error_raw = speed_error;  // Store before deadband
         
-        // === DYNAMIC BIAS LEARNING (handled by PID module) ===
-        // Update bias learning with current speed error
-        pid_update_bias(speed_error_raw);
-        
-        // Get the current motor bias adjustment
-        float motor_bias_adjustment = pid_get_bias_adjustment();
-        
-        // Apply larger deadband for noisy low-speed encoders
-        if (fabs(speed_error) < 3.0f)  // 3 RPM deadband
+        // Apply 1.0 RPM deadband to ignore encoder noise
+        if (fabs(speed_error) < 1.0f)
         {
             speed_error = 0.0f;
         }
         
-        // Use PID to compute correction based on speed difference
+        // PID computes correction - integral naturally accumulates to compensate voltage curves
         float pid_output = pid_compute_heading(speed_error);
         
         // Scale PID output to motor correction range
-        const float PID_TO_MOTOR_SCALE = 0.008f;
+        const float PID_TO_MOTOR_SCALE = 0.015f;
         float speed_correction = pid_output * PID_TO_MOTOR_SCALE;
-        float speed_correction_raw = speed_correction;  // Store before clamping
-        
-        // Limit correction to prevent extreme motor speeds
-        const float MAX_SPEED_CORRECTION = 0.12f;
-        if (speed_correction > MAX_SPEED_CORRECTION) speed_correction = MAX_SPEED_CORRECTION;
-        if (speed_correction < -MAX_SPEED_CORRECTION) speed_correction = -MAX_SPEED_CORRECTION;
         
         // Apply correction to equalize wheel speeds
         // If left wheel is faster (positive error), slow it down and speed up right
         float left_cmd = BASE_SPEED - speed_correction;
         float right_cmd = BASE_SPEED + speed_correction;
-        
-        // Apply dynamic bias to compensate for mechanical differences
-        // Bias is applied asymmetrically: reduce stronger motor, boost weaker motor
-        left_cmd -= motor_bias_adjustment;   // If left is faster (positive bias), reduce it
-        right_cmd += motor_bias_adjustment;  // Compensate by increasing right
         
         // Ensure commands stay within valid range [0, 1.0]
         if (left_cmd < 0.0f) left_cmd = 0.0f;
@@ -343,9 +336,10 @@ void line_follow_task(void *params)
         if (right_cmd < 0.0f) right_cmd = 0.0f;
         if (right_cmd > 1.0f) right_cmd = 1.0f;
         
-        // Calculate actual motor power percentages
+        // Calculate actual motor power percentages and difference
         float left_power_pct = left_cmd * 100.0f;
         float right_power_pct = right_cmd * 100.0f;
+        float power_diff_pct = left_power_pct - right_power_pct;
 
         motor_set_speed(left_cmd, right_cmd);
 
@@ -353,38 +347,31 @@ void line_follow_task(void *params)
         debug_counter++;
         if (debug_counter >= 20)  // 20 * 10ms = 200ms
         {
-            // Get bias statistics from PID module
-            float bias_integral;
-            uint32_t samples_collected;
-            pid_get_bias_stats(&bias_integral, &samples_collected);
+            // Get PID integral value (this IS the learned feedforward compensation)
+            float integral = pid_get_heading_integral();
             
             printf("\n┌─────────────────────────────────────────────────────────────────────┐\n");
             printf("│ ENCODER FEEDBACK                                                    │\n");
             printf("│   Left RPM:     %6.1f    Right RPM:    %6.1f    Avg: %6.1f   │\n", 
-                   left_rpm, right_rpm, avg_rpm);
-            printf("│   Speed Error:  %+6.1f RPM  (Raw: %+6.1f before deadband)        │\n", 
-                   speed_error, speed_error_raw);
+                   left_rpm_filtered, right_rpm_filtered, avg_rpm);
+            printf("│   Speed Error:  %+6.1f RPM  (Raw: %+6.1f before %.1f deadband)    │\n", 
+                   speed_error, speed_error_raw, 1.0f);
             printf("├─────────────────────────────────────────────────────────────────────┤\n");
-            printf("│ DYNAMIC BIAS LEARNING (Samples: %5lu)                             │\n", 
-                   samples_collected);
-            printf("│   Bias Integral:%+7.2f RPM  (Long-term average drift)            │\n", 
-                   bias_integral);
-            printf("│   Motor Bias:   %+7.4f  (Applied adjustment to motors)           │\n", 
-                   motor_bias_adjustment);
-            printf("├─────────────────────────────────────────────────────────────────────┤\n");
-            printf("│ PID CALCULATION                                                     │\n");
-            printf("│   PID Output:   %+7.3f  (Kp=%.2f Ki=%.3f Kd=%.2f)                │\n", 
+            printf("│ PID CONTROL (Integral = Feedforward Compensation)                  │\n");
+            printf("│   PID Output:  %+7.3f  (Kp=%.2f Ki=%.3f Kd=%.2f)                │\n", 
                    pid_output, PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING);
-            printf("│   Scaled Corr:  %+7.4f  (Raw: %+7.4f before clamp)              │\n", 
-                   speed_correction, speed_correction_raw);
+            printf("│   Integral:    %+7.2f  (learned motor voltage curve diff)       │\n", 
+                   integral);
+            printf("│   Scaled Corr: %+7.4f  (applied to motors, scale=%.3f)           │\n", 
+                   speed_correction, PID_TO_MOTOR_SCALE);
             printf("├─────────────────────────────────────────────────────────────────────┤\n");
             printf("│ MOTOR COMMANDS                                                      │\n");
-            printf("│   Left Motor:   %.3f  (%5.1f%%)    [BASE %.2f - CORR %+.3f]     │\n", 
+            printf("│   Left Motor:   %.3f  (%5.1f%%)    [BASE %.2f - CORR %+.3f]     │\n",
                    left_cmd, left_power_pct, BASE_SPEED, speed_correction);
-            printf("│   Right Motor:  %.3f  (%5.1f%%)    [BASE %.2f + CORR %+.3f]     │\n", 
+            printf("│   Right Motor:  %.3f  (%5.1f%%)    [BASE %.2f + CORR %+.3f]     │\n",
                    right_cmd, right_power_pct, BASE_SPEED, speed_correction);
-            printf("│   Power Diff:   %+5.1f%%                                            │\n", 
-                   left_power_pct - right_power_pct);
+            printf("│   Power Diff:  %+6.1f%%  (compensates for motor differences)       │\n", 
+                   power_diff_pct);
             printf("└─────────────────────────────────────────────────────────────────────┘\n");
             debug_counter = 0;
         }
