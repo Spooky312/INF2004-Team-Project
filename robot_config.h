@@ -76,10 +76,14 @@
 // ============================================================================
 
 // ---- EMA Filter for Heading ----
-#define IMU_EMA_ALPHA       0.30f   // EMA smoothing factor (0.0-1.0)
+#define IMU_EMA_ALPHA       0.15f   // EMA smoothing factor (0.0-1.0)
                                     // Lower = smoother but slower response
                                     // Higher = faster but noisier
-                                    // Increased from 0.15 to 0.30 for better tracking
+                                    // Reduced to 0.15 for maximum stability
+                                    
+#define IMU_OUTLIER_THRESHOLD 30.0f // Reject heading changes > this value (degrees)
+                                    // Helps filter EMI from motors/WiFi
+                                    // Reduced to 30° for stricter rejection
 
 // ---- Magnetometer Calibration ----
 // Hard-iron offset calibration (adjust based on your environment)

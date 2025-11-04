@@ -186,8 +186,9 @@ bool imu_get_heading_deg(float *heading_raw_deg, float *heading_filt_deg)
             diff += 360.0f;
         }
         
-        // Outlier rejection: if change is > 90° in one reading, likely interference
-        if (fabsf(diff) > 90.0f) {
+        // Stronger outlier rejection: if change is > threshold in one reading, likely interference
+        // Threshold configured in robot_config.h (IMU_OUTLIER_THRESHOLD)
+        if (fabsf(diff) > IMU_OUTLIER_THRESHOLD) {
             // Use previous filtered value, don't update
             heading_deg = ema_heading_deg;
         } else {
