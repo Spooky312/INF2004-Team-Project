@@ -178,8 +178,26 @@ bool imu_get_heading_deg(float *heading_raw_deg, float *heading_filt_deg)
         ema_heading_deg = heading_deg;
         ema_inited = true;
     } else {
-        ema_heading_deg = (IMU_EMA_ALPHA * heading_deg)
-                        + (1.0f - IMU_EMA_ALPHA) * ema_heading_deg;
+        // Handle wraparound: if difference > 180°, we crossed 0°/360° boundary
+        float diff = heading_deg - ema_heading_deg;
+        if (diff > 180.0f) {
+            diff -= 360.0f;
+        } else if (diff < -180.0f) {
+            diff += 360.0f;
+        }
+        
+        // Outlier rejection: if change is > 90° in one reading, likely interference
+        if (fabsf(diff) > 90.0f) {
+            // Use previous filtered value, don't update
+            heading_deg = ema_heading_deg;
+        } else {
+            // Normal EMA update
+            ema_heading_deg += IMU_EMA_ALPHA * diff;
+            
+            // Normalize back to [0, 360)
+            if (ema_heading_deg < 0.0f) ema_heading_deg += 360.0f;
+            if (ema_heading_deg >= 360.0f) ema_heading_deg -= 360.0f;
+        }
     }
 
     if (heading_raw_deg)  *heading_raw_deg  = heading_deg;

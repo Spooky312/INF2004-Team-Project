@@ -64,10 +64,10 @@ static void gpio_irq_router(uint gpio, uint32_t events) {
 void gpio_router_init(void) {
     // Register shared callback ONCE - this MUST be done before any gpio_set_irq_enabled calls
     gpio_set_irq_enabled_with_callback(ENCODER_LEFT_PIN,
-        GPIO_IRQ_EDGE_FALL, true, &gpio_irq_router);
+        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &gpio_irq_router);
 
-    // Enable all relevant pins
-    gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true);
+    // Enable all relevant pins (try both edges for encoders)
+    gpio_set_irq_enabled(ENCODER_RIGHT_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 #if HAVE_CHG_DIRECTION
     gpio_set_irq_enabled(CHG_DIRECTION_PIN, GPIO_IRQ_EDGE_FALL, true);
 #endif

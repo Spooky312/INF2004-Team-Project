@@ -13,10 +13,10 @@
 // ============================================================================
 
 // ---- Motor Control Pins ----
-#define MOTOR_L_PWM         8       // Left motor PWM (GP8)
-#define MOTOR_L_DIR         9       // Left motor direction (GP9)
-#define MOTOR_R_PWM         10      // Right motor PWM (GP10)
-#define MOTOR_R_DIR         11      // Right motor direction (GP11)
+#define MOTOR_L_PWM         10      // Left motor PWM (GP10)
+#define MOTOR_L_DIR         11      // Left motor direction (GP11)
+#define MOTOR_R_PWM         8       // Right motor PWM (GP8)
+#define MOTOR_R_DIR         9       // Right motor direction (GP9)
 
 // ---- Encoder Pins ----
 #define ENCODER_LEFT_PIN    3       // Left encoder (GP3)
@@ -76,9 +76,10 @@
 // ============================================================================
 
 // ---- EMA Filter for Heading ----
-#define IMU_EMA_ALPHA       0.15f   // EMA smoothing factor (0.0-1.0)
+#define IMU_EMA_ALPHA       0.30f   // EMA smoothing factor (0.0-1.0)
                                     // Lower = smoother but slower response
                                     // Higher = faster but noisier
+                                    // Increased from 0.15 to 0.30 for better tracking
 
 // ---- Magnetometer Calibration ----
 // Hard-iron offset calibration (adjust based on your environment)
