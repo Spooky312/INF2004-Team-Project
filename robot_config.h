@@ -81,9 +81,9 @@
                                     // Higher = faster but noisier
                                     // Reduced to 0.15 for maximum stability
                                     
-#define IMU_OUTLIER_THRESHOLD 30.0f // Reject heading changes > this value (degrees)
+#define IMU_OUTLIER_THRESHOLD 50.0f // Reject heading changes > this value (degrees)
                                     // Helps filter EMI from motors/WiFi
-                                    // Reduced to 30° for stricter rejection
+                                    // Increased to 50° - normal turns can be 20-30°
 
 // ---- Magnetometer Calibration ----
 // Hard-iron offset calibration (adjust based on your environment)

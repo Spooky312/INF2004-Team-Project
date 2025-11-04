@@ -186,19 +186,19 @@ bool imu_get_heading_deg(float *heading_raw_deg, float *heading_filt_deg)
             diff += 360.0f;
         }
         
-        // Stronger outlier rejection: if change is > threshold in one reading, likely interference
-        // Threshold configured in robot_config.h (IMU_OUTLIER_THRESHOLD)
-        if (fabsf(diff) > IMU_OUTLIER_THRESHOLD) {
-            // Use previous filtered value, don't update
-            heading_deg = ema_heading_deg;
+        // Outlier rejection: only reject VERY large jumps (likely sensor glitches)
+        // Normal turning can cause 20-30° changes, so threshold should be higher
+        if (fabsf(diff) > IMU_OUTLIER_THRESHOLD && fabsf(diff) < 180.0f) {
+            // Likely interference/glitch - use smaller alpha for smoothing
+            ema_heading_deg += (IMU_EMA_ALPHA * 0.1f) * diff;
         } else {
             // Normal EMA update
             ema_heading_deg += IMU_EMA_ALPHA * diff;
-            
-            // Normalize back to [0, 360)
-            if (ema_heading_deg < 0.0f) ema_heading_deg += 360.0f;
-            if (ema_heading_deg >= 360.0f) ema_heading_deg -= 360.0f;
         }
+        
+        // Normalize back to [0, 360)
+        if (ema_heading_deg < 0.0f) ema_heading_deg += 360.0f;
+        if (ema_heading_deg >= 360.0f) ema_heading_deg -= 360.0f;
     }
 
     if (heading_raw_deg)  *heading_raw_deg  = heading_deg;
