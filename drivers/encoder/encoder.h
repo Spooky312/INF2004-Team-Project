@@ -1,12 +1,10 @@
 // ===============================================
 //  Module: Encoder Driver
 //  Description: Handles encoder tick interrupts and computes wheel RPM.
+//  Configuration: All pin and timing constants defined in robot_config_demo1.h
 // ===============================================
 #ifndef ENCODER_H
 #define ENCODER_H
-
-#define ENCODER_LEFT_PIN   3
-#define ENCODER_RIGHT_PIN  6
 
 #include "pico/stdlib.h"
 

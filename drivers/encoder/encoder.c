@@ -4,13 +4,14 @@
 //               and live RPM computation for PID and telemetry.
 // ===============================================
 #include "encoder.h"
+#include "robot_config.h"
 #include "hardware/timer.h"
 #include <stdio.h>
 
-// ---- User configuration ----
-#define TICKS_PER_REV      360.0f
-#define WHEEL_CIRCUM_M     0.21f
-#define RPM_TIMEOUT_US     500000  // 0.5 seconds - if no ticks, assume stopped
+// Configuration now in robot_config.h:
+// - TICKS_PER_REV
+// - WHEEL_CIRCUM_M
+// - RPM_TIMEOUT_US
 
 // ---- Internal state ----
 static volatile uint32_t left_ticks = 0;

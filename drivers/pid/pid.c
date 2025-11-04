@@ -3,18 +3,12 @@
 //  Description: Implements discrete PID loops for speed and heading control.
 // ===============================================
 #include "pid.h"
+#include "robot_config.h"
 
-// ---- Tunable gains ----
-// Adjust these empirically for your platform.
-static float kp_speed   = 0.45f;
-static float ki_speed   = 0.05f;
-static float kd_speed   = 0.02f;
-
-// <-- TUNED: Balanced heading gains for smooth tracking
-// Stronger response than before, but still conservative to avoid oscillation
-static float kp_heading = 0.50f;  // Increased from 0.15f for better tracking
-static float ki_heading = 0.02f;  // Small integral to eliminate steady-state error
-static float kd_heading = 0.15f;  // Increased from 0.05f for damping
+// All PID gains now in robot_config.h:
+// - PID_KP_SPEED, PID_KI_SPEED, PID_KD_SPEED
+// - PID_KP_HEADING, PID_KI_HEADING, PID_KD_HEADING
+// - PID_SPEED_I_MAX, PID_HEADING_I_MAX
 
 // ---- Internal PID states ----
 static float speed_integral = 0.0f;
@@ -40,11 +34,11 @@ float pid_compute_speed(float target_speed, float measured_speed)
     float derivative = error - prev_speed_err;
     prev_speed_err = error;
 
-    float output = (kp_speed * error) + (ki_speed * speed_integral) + (kd_speed * derivative);
+    float output = (PID_KP_SPEED * error) + (PID_KI_SPEED * speed_integral) + (PID_KD_SPEED * derivative);
 
-    // Anti-windup limit for integral term
-    if (speed_integral > 200.0f) speed_integral = 200.0f;
-    if (speed_integral < -200.0f) speed_integral = -200.0f;
+    // Anti-windup limit for integral term (from robot_config.h)
+    if (speed_integral > PID_SPEED_I_MAX) speed_integral = PID_SPEED_I_MAX;
+    if (speed_integral < -PID_SPEED_I_MAX) speed_integral = -PID_SPEED_I_MAX;
 
     return output;
 }
@@ -61,13 +55,13 @@ float pid_compute_heading(float heading_error)
     float derivative = heading_error - prev_heading_err;
     prev_heading_err = heading_error;
 
-    float output = (kp_heading * heading_error) +
-                   (ki_heading * heading_integral) +
-                   (kd_heading * derivative);
+    float output = (PID_KP_HEADING * heading_error) +
+                   (PID_KI_HEADING * heading_integral) +
+                   (PID_KD_HEADING * derivative);
 
-    // Anti-windup limit for integral term
-    if (heading_integral > 100.0f) heading_integral = 100.0f;
-    if (heading_integral < -100.0f) heading_integral = -100.0f;
+    // Anti-windup limit for integral term (from robot_config.h)
+    if (heading_integral > PID_HEADING_I_MAX) heading_integral = PID_HEADING_I_MAX;
+    if (heading_integral < -PID_HEADING_I_MAX) heading_integral = -PID_HEADING_I_MAX;
 
     // Clamp output for motor correction range (increased from ±30 to ±50)
     if (output > 50.0f) output = 50.0f;
@@ -78,7 +72,7 @@ float pid_compute_heading(float heading_error)
 // ---- Get PID gains for debugging/tuning ----
 void pid_get_heading_gains(float *kp, float *ki, float *kd)
 {
-    if (kp) *kp = kp_heading;
-    if (ki) *ki = ki_heading;
-    if (kd) *kd = kd_heading;
+    if (kp) *kp = PID_KP_HEADING;
+    if (ki) *ki = PID_KI_HEADING;
+    if (kd) *kd = PID_KD_HEADING;
 }

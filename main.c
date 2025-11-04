@@ -11,6 +11,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include "robot_config.h"  // Centralized configuration
+
 #include "motor.h"
 #include "encoder.h"
 #include "imu.h"
@@ -23,19 +25,9 @@
 #endif
 
 // -----------------------------------------------
-// Task Configuration
-// -----------------------------------------------
-#define WIFI_TASK_PRIORITY       (tskIDLE_PRIORITY + 3)
-#define PID_TASK_PRIORITY        (tskIDLE_PRIORITY + 2)
-#define TELEMETRY_TASK_PRIORITY  (tskIDLE_PRIORITY + 1)
-
-#define PID_TASK_PERIOD_MS       20      // 50 Hz
-#define TELEMETRY_PERIOD_MS      1000    // 1 Hz
-
-// -----------------------------------------------
 // Global Variables
 // -----------------------------------------------
-static float target_speed   = 80.0f;  // Reduced from 150 - adjust as needed (0-255)
+static float target_speed   = TARGET_SPEED;  // From robot_config.h
 static float target_heading = 0.0f;
 
 // -----------------------------------------------
@@ -109,13 +101,13 @@ static void pid_task(void *p)
             printf("State change: %s -> %s\n", state_names[old_state], state_names[state]);
         }
         
-        // Handle smooth state transition
+        // Handle smooth state transition (timing from robot_config.h)
         if (transitioning)
         {
-            if (transition_counter < 25)  // 0.5 seconds - ramp down to stop
+            if (transition_counter < TRANSITION_RAMP_DOWN_TICKS)  // Ramp down to stop
             {
                 // Always slow down first regardless of state change
-                float ramp_speed = target_speed * (1.0f - (transition_counter / 25.0f));
+                float ramp_speed = target_speed * (1.0f - (transition_counter / (float)TRANSITION_RAMP_DOWN_TICKS));
                 
                 // Use old state direction for slowing down
                 int old_state = (state == 0) ? 2 : (state - 1);
@@ -124,12 +116,12 @@ static void pid_task(void *p)
                 motor_set_speed(direction * ramp_speed, direction * ramp_speed);
                 transition_counter++;
             }
-            else if (transition_counter < 40)  // 0.3 seconds - hold at stop
+            else if (transition_counter < TRANSITION_STOP_HOLD_TICKS)  // Hold at stop
             {
                 motor_set_speed(0, 0);
                 transition_counter++;
             }
-            else if (transition_counter < 65)  // 0.5 seconds - ramp up (if not staying stopped)
+            else if (transition_counter < TRANSITION_RAMP_UP_TICKS)  // Ramp up (if not staying stopped)
             {
                 if (state == 0)  // If new state is STOPPED, stay at 0
                 {
@@ -137,7 +129,7 @@ static void pid_task(void *p)
                 }
                 else  // Ramp up for FORWARD or BACKWARD
                 {
-                    float ramp_speed = target_speed * ((transition_counter - 40) / 25.0f);
+                    float ramp_speed = target_speed * ((transition_counter - TRANSITION_STOP_HOLD_TICKS) / (float)(TRANSITION_RAMP_UP_TICKS - TRANSITION_STOP_HOLD_TICKS));
                     int direction = (state == 1) ? 1 : -1;
                     motor_set_speed(direction * ramp_speed, direction * ramp_speed);
                 }
@@ -216,8 +208,8 @@ static void pid_task(void *p)
         float left_output  = direction * (target_speed + speed_corr + heading_corr);
         float right_output = direction * (target_speed + speed_corr - heading_corr);
 
-        // Debug output every 50 loops (1 second)
-        if (++loop_count >= 50) {
+        // Debug output every PID_DEBUG_INTERVAL loops (from robot_config.h)
+        if (++loop_count >= PID_DEBUG_INTERVAL) {
             const char* state_names[] = {"STOPPED", "FORWARD", "BACKWARD"};
             // <-- FIX: Added heading_raw and heading_filt to the debug print
             printf("[PID] %s: L=%.1f R=%.1f (tgt=%.1f rpm=%.1f)\n",
@@ -235,17 +227,18 @@ static void pid_task(void *p)
 }
 
 // -----------------------------------------------
-// Telemetry Task
+// Task 2: Telemetry
 // -----------------------------------------------
-static void telemetry_task(void *p)
+void telemetry_task(__unused void* params)
 {
     TickType_t last = xTaskGetTickCount();
+    uint32_t counter = 0;
     
     printf("[TELEM] Task loop starting\n");
 
     for (;;)
     {
-        printf("[TELEM] Loop iteration\n");
+        counter++;
         
         float rpm_l = encoder_get_rpm_left();
         float rpm_r = encoder_get_rpm_right();
@@ -258,29 +251,33 @@ static void telemetry_task(void *p)
         float heading_raw, heading_filt;
         imu_get_heading_deg(&heading_raw, &heading_filt);
 
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                 "{\"rpm_l\":%.2f,\"rpm_r\":%.2f,\"dist\":%.3f,"
-                 "\"target_heading\":%.2f,\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
-                 "\"ticks_l\":%lu,\"ticks_r\":%lu}",
-                 rpm_l, rpm_r, dist, target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
+        // Print telemetry every TELEMETRY_DEBUG_INTERVAL iterations (from robot_config_demo1.h)
+        if (counter % TELEMETRY_DEBUG_INTERVAL == 0)
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "{\"rpm_l\":%.2f,\"rpm_r\":%.2f,\"dist\":%.3f,"
+                     "\"target_heading\":%.2f,\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
+                     "\"ticks_l\":%lu,\"ticks_r\":%lu}",
+                     rpm_l, rpm_r, dist, target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
 
-        printf("Telemetry: %s\n", msg);
-        
-        // ENCODER DIAGNOSTIC - if ticks are 0, encoders aren't working!
-        if (ticks_l == 0 && ticks_r == 0) {
-            printf("[WARN] No encoder ticks detected! Check connections:\n");
-            printf("       Left encoder: GP27 (Grove Port 5)\n");
-            printf("       Right encoder: GP6 (Grove Port 6)\n");
+            printf("Telemetry: %s\n", msg);
+            
+            // ENCODER DIAGNOSTIC - if ticks are 0, encoders aren't working!
+            if (ticks_l == 0 && ticks_r == 0) {
+                printf("[WARN] No encoder ticks detected! Check connections:\n");
+                printf("       Left encoder: GP%d\n", ENCODER_LEFT_PIN);
+                printf("       Right encoder: GP%d\n", ENCODER_RIGHT_PIN);
+            }
         }
         
         // Only publish if WiFi/MQTT available
         // wifi_mqtt_publish("pico/telemetry", msg);  // Disabled for testing
 
         // Blink status LED (heartbeat)
-        debug_led_blink(25, 20);
+        debug_led_blink(STATUS_LED_PIN, 20);
 
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_TASK_PERIOD_MS));
     }
 }
 
@@ -365,12 +362,16 @@ int main(void)
     printf("[HEADING] Robot will try to maintain this direction\n");
 
     printf("\n[INFO] Creating FreeRTOS tasks...\n");
-    printf("      WiFi task DISABLED for testing\n");
-    // xTaskCreate(wifi_task, "WiFi", 2048, NULL, WIFI_TASK_PRIORITY, NULL);
+#if ENABLE_WIFI_MQTT
+    printf("      Creating WiFi task...\n");
+    xTaskCreate(wifi_task, "WiFi", WIFI_TASK_STACK_SIZE / sizeof(StackType_t), NULL, WIFI_TASK_PRIORITY, NULL);
+#else
+    printf("      WiFi/MQTT DISABLED (set ENABLE_WIFI_MQTT=1 in robot_config_demo1.h to enable)\n");
+#endif
     printf("      Creating PID task...\n");
-    xTaskCreate(pid_task, "PID", 2048, NULL, PID_TASK_PRIORITY, NULL);
+    xTaskCreate(pid_task, "PID", PID_TASK_STACK_SIZE / sizeof(StackType_t), NULL, PID_TASK_PRIORITY, NULL);
     printf("      Creating Telemetry task...\n");
-    xTaskCreate(telemetry_task, "Telemetry", 2048, NULL, TELEMETRY_TASK_PRIORITY, NULL);
+    xTaskCreate(telemetry_task, "Telemetry", TELEMETRY_TASK_STACK_SIZE / sizeof(StackType_t), NULL, TELEMETRY_TASK_PRIORITY, NULL);
 
     printf("\n[INFO] Starting FreeRTOS scheduler...\n");
     printf("========================================\n\n");

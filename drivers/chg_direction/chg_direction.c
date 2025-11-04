@@ -4,8 +4,11 @@
 //               to indicate the robot should reverse direction.
 // ===============================================
 #include "chg_direction.h"
+#include "robot_config.h"  // Centralized configuration
+#include "hardware/gpio.h"
 
-#define CHG_DIRECTION_PIN 21   // adjust as wired
+// Pin definition now in robot_config.h:
+// - CHG_DIRECTION_PIN
 
 static volatile bool pressed_flag = false;
 

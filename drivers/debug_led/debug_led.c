@@ -3,12 +3,12 @@
 //  Description: Implements helper functions for LED feedback.
 // ===============================================
 #include "debug_led.h"
-#include "hardware/timer.h"
+#include "robot_config.h"  // Centralized configuration
+#include "hardware/gpio.h"
+#include "pico/time.h"
 
-#define STATUS_LED_PIN   25  // Onboard LED
-#define IMU_LED_PIN      19  // GP19 (available)
-#define ENCODER_LED_PIN  24  // GP24 (available)
-#define WIFI_LED_PIN     23  // GP23 (available)
+// LED pin definitions now in robot_config.h:
+// - STATUS_LED_PIN, IMU_LED_PIN, ENCODER_LED_PIN, WIFI_LED_PIN
 
 void debug_led_init(void)
 {
