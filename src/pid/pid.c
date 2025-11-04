@@ -17,6 +17,11 @@ static float prev_speed_err = 0.0f;
 static float heading_integral = 0.0f;
 static float prev_heading_err = 0.0f;
 
+// ---- Dynamic bias learning states ----
+static float bias_integral = 0.0f;        // Long-term average of speed error
+static float motor_bias_adjustment = 0.0f; // Calculated motor bias
+static uint32_t samples_collected = 0;     // Number of samples for bias learning
+
 // ---- Initialization ----
 void pid_init(void)
 {
@@ -24,6 +29,11 @@ void pid_init(void)
     prev_speed_err = 0.0f;
     heading_integral = 0.0f;
     prev_heading_err = 0.0f;
+    
+    // Reset bias learning
+    bias_integral = 0.0f;
+    motor_bias_adjustment = 0.0f;
+    samples_collected = 0;
 }
 
 // ---- Speed PID ----
@@ -75,4 +85,36 @@ void pid_get_heading_gains(float *kp, float *ki, float *kd)
     if (kp) *kp = PID_KP_HEADING;
     if (ki) *ki = PID_KI_HEADING;
     if (kd) *kd = PID_KD_HEADING;
+}
+
+// ---- Dynamic bias compensation functions ----
+// Updates bias learning with exponential moving average
+void pid_update_bias(float speed_error)
+{
+    samples_collected++;
+    
+    // Update bias integral with exponential moving average
+    // This learns the long-term tendency (e.g., left motor consistently faster)
+    bias_integral = bias_integral * (1.0f - BIAS_LEARNING_RATE) + speed_error * BIAS_LEARNING_RATE;
+    
+    // Convert bias integral to motor adjustment
+    // Positive bias_integral means left wheel is consistently faster -> need to slow it down
+    motor_bias_adjustment = bias_integral * 0.015f;  // Scale to motor power range
+    
+    // Clamp bias adjustment to prevent extreme values
+    if (motor_bias_adjustment > BIAS_MAX_ADJUSTMENT) motor_bias_adjustment = BIAS_MAX_ADJUSTMENT;
+    if (motor_bias_adjustment < -BIAS_MAX_ADJUSTMENT) motor_bias_adjustment = -BIAS_MAX_ADJUSTMENT;
+}
+
+// Returns the current motor bias adjustment value
+float pid_get_bias_adjustment(void)
+{
+    return motor_bias_adjustment;
+}
+
+// Returns bias statistics for debugging
+void pid_get_bias_stats(float *bias_int, uint32_t *samples)
+{
+    if (bias_int) *bias_int = bias_integral;
+    if (samples) *samples = samples_collected;
 }
