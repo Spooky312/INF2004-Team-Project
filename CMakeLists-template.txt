@@ -14,11 +14,12 @@ set(MQTT_SERVER_IP "172.20.10.6")  # pc IP here
 
 
 # FreeRTOS kernel path - adjust this path as necessary
-set(FREERTOS_KERNEL_PATH "$ENV{HOME}/FreeRTOS-Kernel")
+set(FREERTOS_KERNEL_PATH "C:/Users/iikod/FreeRTOS-Kernel")
 
 
-# --- Wi-Fi + MQTT (FreeRTOS variant) ---
-set(PICO_CYW43_ARCH_DEFAULT lwip_sys_freertos)
+# --- Wi-Fi + MQTT (Polling mode for NO_SYS=1) ---
+set(PICO_LWIP_MQTT 1)
+set(PICO_CYW43_ARCH_DEFAULT lwip_poll)
 
 # -----------------------------------------------
 # SDK Initialization
@@ -76,17 +77,10 @@ add_executable(INF2004-TEAM-PROJECT
     src/barcode/barcode.c
     src/state_machine/state_machine.c
 
-    # drivers/motor/motor.c
-    # drivers/encoder/encoder.c
-    # drivers/imu/imu.c
-    # drivers/pid/pid.c
-    # # drivers/mqtt/wifi_mqtt.c
-    # drivers/debug_led/debug_led.c
-    # drivers/chg_direction/chg_direction.c
-
-    # drivers/networking/networkManager.c
-    # drivers/networking/wifi/wifi.c
-    # drivers/networking/mqtt/mqtt.c
+    # Networking
+    src/networking/networkManager.c
+    src/networking/wifi/wifi.c
+    src/networking/mqtt/mqtt.c
 
 )
 
@@ -102,6 +96,9 @@ target_include_directories(INF2004-TEAM-PROJECT PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src/line_sensor
     ${CMAKE_CURRENT_LIST_DIR}/src/barcode
     ${CMAKE_CURRENT_LIST_DIR}/src/state_machine
+    ${CMAKE_CURRENT_LIST_DIR}/src/networking
+    ${CMAKE_CURRENT_LIST_DIR}/src/networking/wifi
+    ${CMAKE_CURRENT_LIST_DIR}/src/networking/mqtt
 
     ${FREERTOS_KERNEL_PATH}/include
     ${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/include
@@ -137,8 +134,12 @@ target_link_libraries(INF2004-TEAM-PROJECT
     hardware_pwm
     hardware_i2c
     hardware_adc
-    pico_cyw43_arch_lwip_sys_freertos
+
+    # Wi-Fi + lwIP (polling mode, NO_SYS=1) + MQTT
+    pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
+
+    # FreeRTOS (robot control only)
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
 )
