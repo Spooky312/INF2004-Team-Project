@@ -270,7 +270,6 @@ void telemetry_task(__unused void* params)
             char msg[384];
             snprintf(msg, sizeof(msg),
                      "{\"rpm_l\":%.2f,\"rpm_r\":%.2f,\"dist\":%.3f,"
-                     "\"speed_l_mps\":%.3f,\"speed_r_mps\":%.3f,"
                      "\"speed_avg_mps\":%.3f,\"speed_avg_kmh\":%.3f,"
                      "\"target_heading\":%.2f,\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
                      "\"ticks_l\":%lu,\"ticks_r\":%lu}",
