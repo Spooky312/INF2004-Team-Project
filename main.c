@@ -23,7 +23,6 @@
 #include "src/state_machine/state_machine.h"
 #include "src/networking/mqtt/mqtt.h"
 #include "src/networking/networkManager.h"
-#include "src/barcode/barcode.h"
 
 // All configuration now in robot_config.h:
 // - BASE_SPEED, TURN_SPEED
@@ -492,14 +491,14 @@ void turn_task(void *params)
             return;
         }
 
-        // Apply turning motion
+        // Apply turning motion - FIXED: Corrected motor directions
         if (turn_left)
         {
-            motor_set_speed(-TURN_SPEED, TURN_SPEED); // Spin left
+            motor_set_speed(TURN_SPEED, -TURN_SPEED); // Spin left: left forward, right backward
         }
         else
         {
-            motor_set_speed(TURN_SPEED, -TURN_SPEED); // Spin right
+            motor_set_speed(-TURN_SPEED, TURN_SPEED); // Spin right: left backward, right forward
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));
