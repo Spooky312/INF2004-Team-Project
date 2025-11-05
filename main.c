@@ -82,36 +82,75 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
     const char *action = "UNKNOWN";
     bool valid_command = false;
 
-    switch (cmd)
+    // Parse barcode letters to determine turn direction
+    // RIGHT turn: A, C, E, G, I, K, M, O, Q, S, U, W, Y (odd alphabet positions 1,3,5...)
+    // LEFT turn:  B, D, F, H, J, L, N, P, R, T, V, X, Z (even alphabet positions 2,4,6...)
+    bool found_turn_letter = false;
+    for (int i = 0; decoded_str[i] != '\0' && !found_turn_letter; i++)
     {
-    case CMD_LEFT:
-        action = "LEFT TURN";
-        event = EVENT_BARCODE_LEFT;
-        valid_command = true;
-        break;
-    case CMD_RIGHT:
-        action = "RIGHT TURN";
-        event = EVENT_BARCODE_RIGHT;
-        valid_command = true;
-        break;
-    case CMD_STOP:
-        action = "STOP";
-        event = EVENT_BARCODE_STOP;
-        valid_command = true;
-        break;
-    case CMD_FORWARD:
-        action = "FORWARD";
-        event = EVENT_BARCODE_FORWARD;
-        valid_command = true;
-        break;
-    case CMD_UTURN:
-        action = "U-TURN";
-        event = EVENT_BARCODE_FORWARD; // Can handle U-turn logic later
-        valid_command = true;
-        break;
-    default:
-        action = "INVALID/IGNORED";
-        break;
+        char c = decoded_str[i];
+        
+        // Convert to uppercase if lowercase
+        if (c >= 'a' && c <= 'z')
+            c = c - 'a' + 'A';
+        
+        // Check if it's a valid letter A-Z
+        if (c >= 'A' && c <= 'Z')
+        {
+            // Calculate alphabet position (A=1, B=2, C=3, ...)
+            int position = (c - 'A') + 1;
+            
+            if (position % 2 == 1) // Odd position = RIGHT
+            {
+                action = "RIGHT TURN (Letter)";
+                event = EVENT_BARCODE_RIGHT;
+                valid_command = true;
+                found_turn_letter = true;
+            }
+            else // Even position = LEFT
+            {
+                action = "LEFT TURN (Letter)";
+                event = EVENT_BARCODE_LEFT;
+                valid_command = true;
+                found_turn_letter = true;
+            }
+        }
+    }
+
+    // If no turn letter found, fall back to command-based logic
+    if (!found_turn_letter)
+    {
+        switch (cmd)
+        {
+        case CMD_LEFT:
+            action = "LEFT TURN (CMD)";
+            event = EVENT_BARCODE_LEFT;
+            valid_command = true;
+            break;
+        case CMD_RIGHT:
+            action = "RIGHT TURN (CMD)";
+            event = EVENT_BARCODE_RIGHT;
+            valid_command = true;
+            break;
+        case CMD_STOP:
+            action = "STOP";
+            event = EVENT_BARCODE_STOP;
+            valid_command = true;
+            break;
+        case CMD_FORWARD:
+            action = "FORWARD";
+            event = EVENT_BARCODE_FORWARD;
+            valid_command = true;
+            break;
+        case CMD_UTURN:
+            action = "U-TURN";
+            event = EVENT_BARCODE_FORWARD; // Can handle U-turn logic later
+            valid_command = true;
+            break;
+        default:
+            action = "INVALID/IGNORED";
+            break;
+        }
     }
 
     printf("║ Command:      %-24s║\n", action);
