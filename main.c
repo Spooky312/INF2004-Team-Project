@@ -251,6 +251,12 @@ void telemetry_task(__unused void* params)
         float rpm_r = encoder_get_rpm_right();
         float dist  = encoder_get_distance_m();
         
+        // Get speed measurements
+        float speed_left_mps = encoder_get_speed_left_mps();
+        float speed_right_mps = encoder_get_speed_right_mps();
+        float speed_avg_mps = encoder_get_speed_avg_mps();
+        float speed_avg_kmh = encoder_get_speed_avg_kmh();
+        
         // Get tick counts for diagnostics
         uint32_t ticks_l = 0, ticks_r = 0;
         encoder_get_ticks(&ticks_l, &ticks_r);
@@ -261,14 +267,20 @@ void telemetry_task(__unused void* params)
         // Print telemetry every TELEMETRY_DEBUG_INTERVAL iterations (from robot_config.h)
         if (counter % TELEMETRY_DEBUG_INTERVAL == 0)
         {
-            char msg[256];
+            char msg[384];
             snprintf(msg, sizeof(msg),
                      "{\"rpm_l\":%.2f,\"rpm_r\":%.2f,\"dist\":%.3f,"
+                     "\"speed_l_mps\":%.3f,\"speed_r_mps\":%.3f,"
+                     "\"speed_avg_mps\":%.3f,\"speed_avg_kmh\":%.3f,"
                      "\"target_heading\":%.2f,\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
                      "\"ticks_l\":%lu,\"ticks_r\":%lu}",
-                     rpm_l, rpm_r, dist, target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
+                     rpm_l, rpm_r, dist,
+                     speed_left_mps, speed_right_mps, speed_avg_mps, speed_avg_kmh,
+                     target_heading, heading_raw, heading_filt, ticks_l, ticks_r);
 
             printf("[TELEM] %s\n", msg);
+            printf("[TELEM] Speed: %.3f m/s (%.2f km/h) | L: %.3f m/s | R: %.3f m/s\n", 
+                   speed_avg_mps, speed_avg_kmh, speed_left_mps, speed_right_mps);
             
             // ENCODER DIAGNOSTIC - if ticks are 0, encoders aren't working!
             if (ticks_l == 0 && ticks_r == 0) {

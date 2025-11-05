@@ -95,3 +95,53 @@ void encoder_get_ticks(uint32_t *left, uint32_t *right)
     if (left) *left = left_ticks;
     if (right) *right = right_ticks;
 }
+
+// ---- Speed calculation functions ----
+
+/**
+ * @brief Get left wheel linear speed in meters per second
+ * @return Speed in m/s
+ * 
+ * Calculation: Speed (m/s) = RPM × Wheel_Circumference / 60
+ */
+float encoder_get_speed_left_mps(void)
+{
+    float rpm = encoder_get_rpm_left();
+    return (rpm * WHEEL_CIRCUM_M) / 60.0f;
+}
+
+/**
+ * @brief Get right wheel linear speed in meters per second
+ * @return Speed in m/s
+ * 
+ * Calculation: Speed (m/s) = RPM × Wheel_Circumference / 60
+ */
+float encoder_get_speed_right_mps(void)
+{
+    float rpm = encoder_get_rpm_right();
+    return (rpm * WHEEL_CIRCUM_M) / 60.0f;
+}
+
+/**
+ * @brief Get average robot speed in meters per second
+ * @return Average speed in m/s
+ * 
+ * The robot's forward speed is the average of both wheels' speeds
+ */
+float encoder_get_speed_avg_mps(void)
+{
+    float speed_left = encoder_get_speed_left_mps();
+    float speed_right = encoder_get_speed_right_mps();
+    return (speed_left + speed_right) / 2.0f;
+}
+
+/**
+ * @brief Get average robot speed in kilometers per hour
+ * @return Average speed in km/h
+ * 
+ * Converts m/s to km/h by multiplying by 3.6
+ */
+float encoder_get_speed_avg_kmh(void)
+{
+    return encoder_get_speed_avg_mps() * 3.6f;
+}

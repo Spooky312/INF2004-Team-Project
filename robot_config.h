@@ -104,7 +104,7 @@
 // ============================================================================
 // MOTOR CONTROL PARAMETERS
 // ============================================================================
-#define TARGET_SPEED        55.0f   // Default target speed (0-255)
+#define TARGET_SPEED        100.0f   // Default target speed (0-255)
                                     // Reduced from 80 to account for corrected encoder readings
                                     // Old value (80) was calibrated with incorrect 27.2 ticks/rev
                                     // New value: 80 × (27.2/40) = 54.4 ≈ 55

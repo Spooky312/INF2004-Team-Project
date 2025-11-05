@@ -15,4 +15,10 @@ float encoder_get_distance_m(void);
 void encoder_get_ticks(uint32_t *left, uint32_t *right);  // Diagnostic
 void encoder_irq_handler(uint gpio, uint32_t events);
 
+// Speed calculation functions
+float encoder_get_speed_left_mps(void);   // Get left wheel speed in meters per second
+float encoder_get_speed_right_mps(void);  // Get right wheel speed in meters per second
+float encoder_get_speed_avg_mps(void);    // Get average robot speed in meters per second
+float encoder_get_speed_avg_kmh(void);    // Get average robot speed in kilometers per hour
+
 #endif
