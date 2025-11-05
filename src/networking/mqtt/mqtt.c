@@ -5,6 +5,8 @@
 #include "lwip/apps/mqtt.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/dns.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 static mqtt_client_t *client = NULL;
 static bool connected = false;
@@ -83,6 +85,7 @@ void mqtt_app_publish(const char *topic, const char *payload, int qos, int retai
     err_t err = mqtt_publish(client, topic, payload, strlen(payload), qos, retain, NULL, NULL);
     if (err != ERR_OK) {
         printf("[MQTT] ⚠️ Publish failed (%d)\n", err);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 

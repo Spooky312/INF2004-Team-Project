@@ -37,6 +37,11 @@ static TaskHandle_t turn_task_handle = NULL;
 static volatile bool emergency_stop_triggered = false;
 static volatile bool barcode_scanning_active = false;
 
+#define TELEMETRY_PERIOD_MS 1000
+static float target_heading = 0.0f;
+static float obstacle_width_cm = 0.0f;
+static int obstacle_count = 0;
+
 // ===== Barcode state tracking =====
 static char last_barcode_decoded[BARCODE_MAX_LEN] = "NONE";
 static uint32_t total_barcodes_detected = 0;
@@ -585,108 +590,82 @@ void state_monitor_task(void *params)
 }
 // ===== Telemetry task =====
 
-void telemetry_task(void *params)
+static void telemetry_task(void *p)
 {
-    printf("[TELEMETRY] Task started\n");
+    TickType_t last = xTaskGetTickCount();
+    printf("[TELEM] Task loop starting\n");
 
-    uint32_t report_count = 0;
-    static int mqtt_fail_count = 0; // track MQTT failures
+    static int mqtt_fail_count = 0;
 
-    while (1)
+    for (;;)
     {
-        vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_RATE_MS)); // 5Hz
+        float rpm_l = encoder_get_rpm_left();
+        float rpm_r = encoder_get_rpm_right();
+        float dist_m = encoder_get_distance_m();
 
-        const robot_context_t *ctx = NULL;
-        robot_state_t state = STATE_IDLE;
+        uint32_t ticks_l = 0, ticks_r = 0;
+        encoder_get_ticks(&ticks_l, &ticks_r);
 
-        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+        float heading_raw, heading_filt;
+        imu_get_heading_deg(&heading_raw, &heading_filt);
+
+        // 🆕 Read live obstacle distance (in cm)
+        float obstacle_distance_cm = 0.0f;
+
+        // 🆕— barcode/state context (quick critical section)
+        const char *state_str = "IDLE";
+        const char *cmd_str = "NONE";
+        bool line_on_track = false;
+
+        // if (xSemaphoreTake(state_mutex, pdMS_TO_TICKS(2))) {
+        //     const robot_context_t *ctx = state_machine_get_context();
+        //     robot_state_t st = ctx->current_state;
+
+        //     state_str = state_machine_state_name(st);
+        //     cmd_str =
+        //         (ctx->last_barcode_cmd == CMD_LEFT)    ? "LEFT" :
+        //         (ctx->last_barcode_cmd == CMD_RIGHT)   ? "RIGHT" :
+        //         (ctx->last_barcode_cmd == CMD_STOP)    ? "STOP"  :
+        //         (ctx->last_barcode_cmd == CMD_FORWARD) ? "FORWARD" : "NONE";
+        //     line_on_track = ctx->line_on_track;
+
+        //     xSemaphoreGive(state_mutex);
+        // }
+
+        if (mqtt_app_is_connected())
         {
-            ctx = state_machine_get_context();
-            state = ctx->current_state;
+            char msg[512];
+            // 🆕 include state / barcode fields to match your other telemetry
+            snprintf(msg, sizeof(msg),
+                     "{"
+                     "\"rpm_l\":%.2f,\"rpm_r\":%.2f,"
+                     "\"dist_m\":%.3f,"
+                     "\"heading_raw\":%.2f,\"heading_filt\":%.2f,\"target_heading\":%.2f,"
+                     "\"state\":\"%s\","
+                     "\"barcode_cmd\":\"%s\","
+                     "\"line_on_track\":%s"
+                     "}",
+                     rpm_l, rpm_r, dist_m,
+                     heading_raw, heading_filt, target_heading,
+                     state_str,
+                     cmd_str,
+                     (line_on_track ? "true" : "false"));
 
-            // Capture values used both for printing and JSON
-            float rpm_l = encoder_get_rpm_left();
-            float rpm_r = encoder_get_rpm_right();
+            vTaskDelay(pdMS_TO_TICKS(200));
+            // (Optional) wrap with cyw43_arch_lwip_begin/end if you're using threadsafe background arch
+            mqtt_app_publish("pico/telemetry", msg, 0, 0);
+            printf("[TELEM] Published: %s\n", msg);
 
-            uint16_t line_raw = line_sensor_read_raw();
-            float yaw_raw = 0.0f, yaw = 0.0f;
-            imu_get_heading_deg(&yaw_raw, &yaw);
-
-            const char *last_barcode = barcode_get_last_decoded();
-
-            printf("\n----- Telemetry Report #%lu -----\n", ++report_count);
-            printf("State:         %s\n", state_machine_state_name(state));
-            printf("Line Error:    %.3f\n", ctx->line_error);
-            printf("Line Status:   %s\n", ctx->line_on_track ? "ON TRACK" : "OFF TRACK");
-            printf("Speed L/R:     %.2f / %.2f\n", ctx->current_speed_left, ctx->current_speed_right);
-            printf("RPM L/R:       %.0f / %.0f\n", rpm_l, rpm_r);
-            printf("Distance:      %.2f m\n", ctx->distance_traveled_m);
-            printf("Last Barcode:  %s\n",
-                   ctx->last_barcode_cmd == CMD_LEFT ? "LEFT" : ctx->last_barcode_cmd == CMD_RIGHT ? "RIGHT"
-                                                            : ctx->last_barcode_cmd == CMD_STOP    ? "STOP"
-                                                            : ctx->last_barcode_cmd == CMD_FORWARD ? "FORWARD"
-                                                                                                   : "NONE");
-
-            printf("Raw Line ADC:  %u\n", line_raw);
-            printf("IMU Yaw:       %.1f°\n", yaw);
-            printf("Last Barcode:  \"%s\" (Total: %lu)\n",
-                   last_barcode ? last_barcode : "none", total_barcodes_detected);
-            printf("Barcode Scan:  ACTIVE\n"); // Always active after startup
-            printf("-----------------------------\n\n");
-
-            // Build JSON
-            float dist_m = ctx ? ctx->distance_traveled_m : 0.0f;
-            float target_heading = 0.0f;
-            float obstacle_distance_cm = 0.0f;
-            float obstacle_width_cm = 0.0f;
-            unsigned long obstacle_count = 0UL;
-
-            const char *state_str = state_machine_state_name(state);
-            const char *cmd_str =
-                (ctx->last_barcode_cmd == CMD_LEFT) ? "LEFT" : (ctx->last_barcode_cmd == CMD_RIGHT) ? "RIGHT"
-                                                           : (ctx->last_barcode_cmd == CMD_STOP)    ? "STOP"
-                                                           : (ctx->last_barcode_cmd == CMD_FORWARD) ? "FORWARD"
-                                                                                                    : "NONE"; // no UTURN
-
-            bool line_on_track = ctx->line_on_track;
-
-            if (mqtt_app_is_connected())
-            {
-                char msg[768];
-                snprintf(msg, sizeof msg,
-                         "{"
-                         "\"rpm_l\":%.2f,\"rpm_r\":%.2f,"
-                         "\"dist_m\":%.3f,"
-                         "\"heading_raw\":%.2f,\"heading_filt\":%.2f,\"target_heading\":%.2f,"
-                         "\"obstacle_distance_cm\":%.2f,"
-                         "\"obstacle_width_cm\":%.2f,"
-                         "\"obstacle_count\":%lu,"
-                         "\"state\":\"%s\","
-                         "\"barcode_cmd\":\"%s\","
-                         "\"line_on_track\":%s"
-                         "}",
-                         rpm_l, rpm_r,
-                         dist_m,
-                         yaw_raw, yaw, target_heading, // use yaw as filtered heading
-                         obstacle_distance_cm,
-                         obstacle_width_cm,
-                         obstacle_count,
-                         state_str,
-                         cmd_str,
-                         (line_on_track ? "true" : "false"));
-
-                mqtt_app_publish("pico/telemetry", msg, 0, 0);
-                printf("[TELEMETRY] Published #%lu: %s\n", report_count, msg);
-                mqtt_fail_count = 0;
-            }
-            else
-            {
-                mqtt_fail_count++;
-                printf("[TELEMETRY] MQTT not connected (fail #%d)\n", mqtt_fail_count);
-            }
-
-            xSemaphoreGive(state_mutex);
+            obstacle_width_cm = 0.0f;
+            mqtt_fail_count = 0;
         }
+        else
+        {
+            mqtt_fail_count++;
+            printf("[TELEM] MQTT not connected (fail #%d)\n", mqtt_fail_count);
+        }
+
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
     }
 }
 
@@ -728,7 +707,7 @@ int main()
 
     printf("[INIT] Creating FreeRTOS tasks...\n");
 
-    xTaskCreate(network_manager_task, "NetMgr", 2048, NULL, NET_TASK_PRIORITY, NULL);    
+    xTaskCreate(network_manager_task, "NetMgr", 2048, NULL, NET_TASK_PRIORITY, NULL);
 
     xTaskCreate(line_follow_task, "LineFollow", LINE_FOLLOW_STACK_SIZE, NULL,
                 LINE_FOLLOW_TASK_PRIORITY, NULL);
