@@ -479,6 +479,29 @@ barcode_command_t barcode_parse_command(const char *str) {
     if (strcmp(upper, "U-TURN") == 0) return CMD_UTURN;
     if (strcmp(upper, "U TURN") == 0) return CMD_UTURN;
     
+    // Letter-based direction logic:
+    // Move Right if letter is: A, C, E, G, I, K, M, O, Q, S, U, W, or Y
+    // Move Left if letter is: B, D, F, H, J, L, N, P, R, T, V, X, or Z
+    if (strlen(upper) == 1) {
+        char letter = upper[0];
+        
+        // Right: A, C, E, G, I, K, M, O, Q, S, U, W, Y (odd positions in alphabet)
+        if (letter == 'A' || letter == 'C' || letter == 'E' || letter == 'G' ||
+            letter == 'I' || letter == 'K' || letter == 'M' || letter == 'O' ||
+            letter == 'Q' || letter == 'S' || letter == 'U' || letter == 'W' ||
+            letter == 'Y') {
+            return CMD_RIGHT;
+        }
+        
+        // Left: B, D, F, H, J, L, N, P, R, T, V, X, Z (even positions in alphabet)
+        if (letter == 'B' || letter == 'D' || letter == 'F' || letter == 'H' ||
+            letter == 'J' || letter == 'L' || letter == 'N' || letter == 'P' ||
+            letter == 'R' || letter == 'T' || letter == 'V' || letter == 'X' ||
+            letter == 'Z') {
+            return CMD_LEFT;
+        }
+    }
+    
     return CMD_NONE;
 }
 

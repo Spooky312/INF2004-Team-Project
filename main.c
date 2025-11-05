@@ -446,6 +446,11 @@ void turn_task(void *params)
     }
 
     turn_task_handle = NULL;
+
+    // Start line following task after turn completion
+    xTaskCreate(line_follow_task, "LineFollow", LINE_FOLLOW_STACK_SIZE, NULL,
+                LINE_FOLLOW_TASK_PRIORITY, NULL);
+
     vTaskDelete(NULL);
 }
 
