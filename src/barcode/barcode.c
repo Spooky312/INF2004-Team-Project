@@ -71,7 +71,7 @@ static struct repeating_timer timer;
 static bool reader_active = false;
 
 // Forward declarations
-static const char* barcode_command_to_string(barcode_command_t cmd);
+// static const char* barcode_command_to_string(barcode_command_t cmd);
 
 // Code-39 pattern table
 typedef struct { char ch; const char *pat; } c39_pat_t;
@@ -585,3 +585,5 @@ void barcode_reset_narrow_history(void) {
 int barcode_get_narrow_sample_count(void) {
     return narrow_count;
 }
+
+

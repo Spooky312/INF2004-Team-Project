@@ -50,6 +50,7 @@ HTML = """
 
     <div class="card"><div class="label">Obstacle Count</div><div class="value" id="obstacle_count">–</div></div>
     <div class="card"><div class="label">On Line</div><div class="value" id="line_on_track">–</div></div>
+    <div class="card"><div class="label">Barcode Letter</div><div class="value" id="barcode_letter">–</div></div>
     <div class="card"><div class="label">Barcode Command</div><div class="value" id="barcode_cmd">–</div></div>
     <div class="card"><div class="label">Current State</div><div class="value" id="state">–</div></div>
   </div>
@@ -97,11 +98,11 @@ HTML = """
       // Backward compatibility / normalization (optional)
       if (d.barcode_command && !d.barcode_cmd) d.barcode_cmd = d.barcode_command;
       if (d.current_state && !d.state) d.state = d.current_state;
-      if (d.dist !== undefined && d.dist_m === undefined) d.dist_m = d.dist; // some firmwares used 'dist'
+      if (d.dist !== undefined && d.dist_m === undefined) d.dist_m = d.dist;
 
       if ('rpm_l' in d)                   el('rpm_l').textContent              = Number(d.rpm_l).toFixed(2);
       if ('rpm_r' in d)                   el('rpm_r').textContent              = Number(d.rpm_r).toFixed(2);
-      if ('speed_avg_mps' in d)           el('speed').textContent              = Number(d.speed).toFixed(3);
+      if ('speed' in d)                   el('speed').textContent              = Number(d.speed).toFixed(3);   // ← uses normalized 'speed'
       if ('dist_m' in d)                  el('dist_m').textContent             = Number(d.dist_m).toFixed(3);
       if ('heading_raw' in d)             el('heading_raw').textContent        = Number(d.heading_raw).toFixed(2);
       if ('heading_filt' in d)            el('heading_filt').textContent       = Number(d.heading_filt).toFixed(2);
@@ -110,6 +111,7 @@ HTML = """
       if ('obstacle_width_cm' in d)       el('obstacle_width_cm').textContent    = Number(d.obstacle_width_cm).toFixed(2);
       if ('obstacle_count' in d)          el('obstacle_count').textContent       = d.obstacle_count;
       if ('line_on_track' in d)           el('line_on_track').textContent        = yesNo(d.line_on_track);
+      if ('barcode_letter' in d)          el('barcode_letter').textContent       = d.barcode_letter;            // ← show letter
       if ('barcode_cmd' in d)             el('barcode_cmd').textContent          = d.barcode_cmd;
       if ('state' in d)                   el('state').textContent                = d.state;
 
@@ -134,27 +136,6 @@ HTML = """
 def index():
     return render_template_string(HTML)
 
-RIGHT_SET = set(list("ACEGIKMOQSUWY"))
-LEFT_SET  = set(list("BDFHJLNPRTVXZ"))
-
-def derive_cmd_from_barcode_text(text: str):
-    """
-    Given a barcode string, find the first A–Z letter and return
-    'RIGHT' if in A,C,E,...,Y or 'LEFT' if in B,D,F,...,Z.
-    Returns None if no letter found.
-    """
-    if not text:
-        return None
-    m = re.search(r"[A-Za-z]", text)
-    if not m:
-        return None
-    ch = m.group(0).upper()
-    if ch in RIGHT_SET:
-        return "RIGHT"
-    if ch in LEFT_SET:
-        return "LEFT"
-    return None
-
 def start_mqtt():
     client = mqtt.Client()
 
@@ -163,44 +144,56 @@ def start_mqtt():
         c.subscribe(TOPIC)
 
     def on_message(c, userdata, msg):
-        try:
-            payload = msg.payload.decode("utf-8", "ignore")
-            print("📡 Received:", payload)
-            data = json.loads(payload)
+      try:
+          payload = msg.payload.decode("utf-8", "ignore")
+          print("📡 Received:", payload)
+          data = json.loads(payload)
 
-            # --- Normalize to expected keys from firmware ---
-            # obstacle_distance_cm: tolerate legacy 'dist' or 'front_distance'
-            if "obstacle_distance_cm" not in data:
-            # Accept alternative names if your firmware ever uses them
-                if "front_distance_cm" in data:
-                    data["obstacle_distance_cm"] = float(data["front_distance_cm"])
-                elif "front_distance_m" in data:
-                    data["obstacle_distance_cm"] = float(data["front_distance_m"]) * 100.0
-                else:
-                    data["obstacle_distance_cm"] = None  # unknown / not provided
+          # Normalize obstacle distance
+          if "obstacle_distance_cm" not in data:
+              if "front_distance_cm" in data:
+                  data["obstacle_distance_cm"] = float(data["front_distance_cm"])
+              elif "front_distance_m" in data:
+                  data["obstacle_distance_cm"] = float(data["front_distance_m"]) * 100.0
+              else:
+                  data["obstacle_distance_cm"] = None
 
-            # unify barcode/state names if older payloads appear
-            if "barcode_command" in data and "barcode_cmd" not in data:
-                data["barcode_cmd"] = data["barcode_command"]
-            if "current_state" in data and "state" not in data:
-                data["state"] = data["current_state"]
-
-            if "speed" not in data:
+          # Normalize speed
+          if "speed" not in data:
               if "speed_avg_mps" in data:
-                  try:
-                      data["speed"] = float(data["speed_avg_mps"])
-                  except Exception:
-                      pass
-              elif "avg_speed_mps" in data:  # optional fallback name
-                  try:
-                      data["speed"] = float(data["avg_speed_mps"])
-                  except Exception:
-                      pass
+                  try: data["speed"] = float(data["speed_avg_mps"])
+                  except Exception: pass
+              elif "avg_speed_mps" in data:
+                  try: data["speed"] = float(data["avg_speed_mps"])
+                  except Exception: pass
 
-            history.append(data)
-            socketio.emit("telemetry", data)
-        except Exception as e:
-            print("❌ Bad payload:", e)
+          # ---- Derive barcode letter + command ----
+          letter = None
+          if "barcode_letter" in data and str(data["barcode_letter"]).strip():
+              letter = str(data["barcode_letter"]).strip().upper()[:1]
+          elif "barcode_text" in data and isinstance(data["barcode_text"], str) and data["barcode_text"].strip():
+              letter = data["barcode_text"].strip().upper()[:1]
+
+          if letter:
+              data["barcode_letter"] = letter
+              right_letters = set("ACEGIKMOQSUWY")
+              left_letters  = set("BDFHJLNPRTVXZ")
+
+              if letter in right_letters:
+                  data["barcode_cmd"] = "RIGHT"
+              elif letter in left_letters:
+                  data["barcode_cmd"] = "LEFT"
+              else:
+                  data["barcode_cmd"] = "NONE"
+          else:
+              data["barcode_letter"] = "–"
+              data["barcode_cmd"] = "NONE"
+
+          history.append(data)
+          socketio.emit("telemetry", data)
+      except Exception as e:
+          print("❌ Bad payload:", e)
+
 
     client.on_connect = on_connect
     client.on_message = on_message

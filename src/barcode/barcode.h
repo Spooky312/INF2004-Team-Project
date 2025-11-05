@@ -54,6 +54,8 @@ const char* barcode_get_last_decoded(void);
 // ---- Parse command from decoded string ----
 barcode_command_t barcode_parse_command(const char* str);
 
+const char *barcode_command_to_string(barcode_command_t cmd); 
+
 // ---- Manual polling (if not using timer interrupt) ----
 void barcode_update(void);
 

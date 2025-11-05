@@ -23,6 +23,7 @@
 #include "src/state_machine/state_machine.h"
 #include "src/networking/mqtt/mqtt.h"
 #include "src/networking/networkManager.h"
+#include "src/barcode/barcode.h"
 
 // All configuration now in robot_config.h:
 // - BASE_SPEED, TURN_SPEED
@@ -94,17 +95,17 @@ void on_barcode_detected(const char *decoded_str, barcode_command_t cmd)
     for (int i = 0; decoded_str[i] != '\0' && !found_turn_letter; i++)
     {
         char c = decoded_str[i];
-        
+
         // Convert to uppercase if lowercase
         if (c >= 'a' && c <= 'z')
             c = c - 'a' + 'A';
-        
+
         // Check if it's a valid letter A-Z
         if (c >= 'A' && c <= 'Z')
         {
             // Calculate alphabet position (A=1, B=2, C=3, ...)
             int position = (c - 'A') + 1;
-            
+
             if (position % 2 == 1) // Odd position = RIGHT
             {
                 action = "RIGHT TURN (Letter)";
@@ -202,6 +203,74 @@ void barcode_scan_task(void *params)
         barcode_update();
 
         vTaskDelay(pdMS_TO_TICKS(BARCODE_UPDATE_RATE_MS)); // 100Hz polling
+    }
+}
+
+// ===== Line following task =====
+void line_follow_task(void *params)
+{
+    printf("[LINE_FOLLOW] Task started - EDGE FOLLOWING MODE (SMOOTH)\n");
+    printf("[LINE_FOLLOW] Base Speed: %.2f | BLACK→RIGHT, WHITE→LEFT (sine-wave)\n", BASE_SPEED);
+
+    uint32_t debug_counter = 0;
+
+    while (1)
+    {
+        // Check emergency stop
+        if (emergency_stop_triggered)
+        {
+            motor_stop();
+            line_sensor_reset_state(); // Reset line following state
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        robot_state_t state;
+
+        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+        {
+            state = state_machine_get_state();
+            xSemaphoreGive(state_mutex);
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        // Only run in LINE_FOLLOWING state
+        if (state != STATE_LINE_FOLLOWING)
+        {
+            line_sensor_reset_state(); // Reset line following state
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        // Get motor commands from line sensor driver
+        motor_commands_t commands = line_sensor_compute_motor_commands();
+        motor_set_speed(commands.left_speed, commands.right_speed);
+
+        // Debug output every 200ms - COMMENTED OUT (only show barcode info)
+        // debug_counter++;
+        // if (debug_counter >= 20)  // 20 * 10ms = 200ms
+        // {
+        //     line_state_t line_state = line_sensor_read();
+        //     const char* sensor_str = (line_state == LINE_BLACK) ? "BLACK" : "WHITE";
+        //     printf("[%s] Motors: L:%.3f R:%.3f\n",
+        //            sensor_str, commands.left_speed, commands.right_speed);
+        //     debug_counter = 0;
+        // }
+
+        // Update state machine context
+        float distance = encoder_get_distance_m();
+        bool on_line = (line_sensor_read() == LINE_BLACK);
+        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
+        {
+            state_machine_update_context(commands.left_speed, commands.right_speed, distance, 0.0f, on_line);
+            xSemaphoreGive(state_mutex);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz update
     }
 }
 
@@ -454,73 +523,7 @@ void turn_task(void *params)
     vTaskDelete(NULL);
 }
 
-// ===== Line following task =====
-void line_follow_task(void *params)
-{
-    printf("[LINE_FOLLOW] Task started - EDGE FOLLOWING MODE (SMOOTH)\n");
-    printf("[LINE_FOLLOW] Base Speed: %.2f | BLACK→RIGHT, WHITE→LEFT (sine-wave)\n", BASE_SPEED);
 
-    uint32_t debug_counter = 0;
-
-    while (1)
-    {
-        // Check emergency stop
-        if (emergency_stop_triggered)
-        {
-            motor_stop();
-            line_sensor_reset_state(); // Reset line following state
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        robot_state_t state;
-
-        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-        {
-            state = state_machine_get_state();
-            xSemaphoreGive(state_mutex);
-        }
-        else
-        {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        // Only run in LINE_FOLLOWING state
-        if (state != STATE_LINE_FOLLOWING)
-        {
-            line_sensor_reset_state(); // Reset line following state
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        // Get motor commands from line sensor driver
-        motor_commands_t commands = line_sensor_compute_motor_commands();
-        motor_set_speed(commands.left_speed, commands.right_speed);
-
-        // Debug output every 200ms - COMMENTED OUT (only show barcode info)
-        // debug_counter++;
-        // if (debug_counter >= 20)  // 20 * 10ms = 200ms
-        // {
-        //     line_state_t line_state = line_sensor_read();
-        //     const char* sensor_str = (line_state == LINE_BLACK) ? "BLACK" : "WHITE";
-        //     printf("[%s] Motors: L:%.3f R:%.3f\n",
-        //            sensor_str, commands.left_speed, commands.right_speed);
-        //     debug_counter = 0;
-        // }
-
-        // Update state machine context
-        float distance = encoder_get_distance_m();
-        bool on_line = (line_sensor_read() == LINE_BLACK);
-        if (xSemaphoreTake(state_mutex, portMAX_DELAY))
-        {
-            state_machine_update_context(commands.left_speed, commands.right_speed, distance, 0.0f, on_line);
-            xSemaphoreGive(state_mutex);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz update
-    }
-}
 
 // ===== State monitor task =====
 void state_monitor_task(void *params)
@@ -604,75 +607,96 @@ static void telemetry_task(void *p)
 
     for (;;)
     {
-        float rpm_l = encoder_get_rpm_left();
-        float rpm_r = encoder_get_rpm_right();
-        float dist_m = encoder_get_distance_m();
+        // --- fast local readings (no mutex) ---
+        float rpm_l   = encoder_get_rpm_left();
+        float rpm_r   = encoder_get_rpm_right();
+        float dist_m  = encoder_get_distance_m();
 
         uint32_t ticks_l = 0, ticks_r = 0;
         encoder_get_ticks(&ticks_l, &ticks_r);
 
-        float heading_raw, heading_filt;
+        float heading_raw = 0.f, heading_filt = 0.f;
         imu_get_heading_deg(&heading_raw, &heading_filt);
 
-        // 🆕 Read live obstacle distance (in cm)
-        float obstacle_distance_cm = 0.0f;
-
-        // 🆕— barcode/state context (quick critical section)
+        // --- defaults for SM / barcode fields (filled below if we can) ---
         const char *state_str = "IDLE";
+        bool        line_on_track = false;
+        const char *barcode_text = "NONE";
         const char *cmd_str = "NONE";
-        bool line_on_track = false;
 
-        // if (xSemaphoreTake(state_mutex, pdMS_TO_TICKS(2))) {
-        //     const robot_context_t *ctx = state_machine_get_context();
-        //     robot_state_t st = ctx->current_state;
+        // ---- Get last decoded barcode text (no lock needed for your getter) ----
+        const char *decoded = barcode_get_last_decoded();
+        if (decoded && decoded[0] != '\0') {
+            barcode_text = decoded;
+        }
 
-        //     state_str = state_machine_state_name(st);
-        //     cmd_str =
-        //         (ctx->last_barcode_cmd == CMD_LEFT)    ? "LEFT" :
-        //         (ctx->last_barcode_cmd == CMD_RIGHT)   ? "RIGHT" :
-        //         (ctx->last_barcode_cmd == CMD_STOP)    ? "STOP"  :
-        //         (ctx->last_barcode_cmd == CMD_FORWARD) ? "FORWARD" : "NONE";
-        //     line_on_track = ctx->line_on_track;
+        // ---- Prefer command from state machine; else derive from barcode text ----
+        barcode_command_t cmd_final = CMD_NONE;
 
-        //     xSemaphoreGive(state_mutex);
-        // }
+        if (xSemaphoreTake(state_mutex, pdMS_TO_TICKS(2))) {
+            const robot_context_t *ctx = state_machine_get_context();
+            if (ctx) {
+                // state & line status
+                state_str     = state_machine_state_name(ctx->current_state);
+                line_on_track = ctx->line_on_track;
 
+                // prefer the SM command if set
+                if (ctx->last_barcode_cmd != CMD_NONE) {
+                    cmd_final = ctx->last_barcode_cmd;
+                }
+            }
+            xSemaphoreGive(state_mutex);
+        }
+
+        // if SM had no command, parse from the last decoded text
+        if (cmd_final == CMD_NONE) {
+            cmd_final = barcode_parse_command(barcode_text);
+        }
+        cmd_str = barcode_command_to_string(cmd_final);
+
+        // --- publish ---
         if (mqtt_app_is_connected())
         {
             char msg[512];
-            // 🆕 include state / barcode fields to match your other telemetry
-            snprintf(msg, sizeof(msg),
-                     "{"
-                     "\"rpm_l\":%.2f,\"rpm_r\":%.2f,"
-                     "\"dist_m\":%.3f,"
-                     "\"heading_raw\":%.2f,\"heading_filt\":%.2f,\"target_heading\":%.2f,"
-                     "\"state\":\"%s\","
-                     "\"barcode_cmd\":\"%s\","
-                     "\"line_on_track\":%s"
-                     "}",
-                     rpm_l, rpm_r, dist_m,
-                     heading_raw, heading_filt, target_heading,
-                     state_str,
-                     cmd_str,
-                     (line_on_track ? "true" : "false"));
+            int n = snprintf(msg, sizeof msg,
+                "{"
+                  "\"rpm_l\":%.2f,\"rpm_r\":%.2f,"
+                  "\"dist_m\":%.3f,"
+                  "\"heading_raw\":%.2f,\"heading_filt\":%.2f,"
+                  "\"state\":\"%s\","
+                  "\"barcode_text\":\"%s\","
+                  "\"barcode_cmd\":\"%s\","
+                  "\"line_on_track\":%s"
+                "}",
+                rpm_l, rpm_r,
+                dist_m,
+                heading_raw, heading_filt,
+                state_str,
+                barcode_text,
+                cmd_str,
+                line_on_track ? "true" : "false");
 
-            vTaskDelay(pdMS_TO_TICKS(200));
-            // (Optional) wrap with cyw43_arch_lwip_begin/end if you're using threadsafe background arch
-            mqtt_app_publish("pico/telemetry", msg, 0, 0);
-            printf("[TELEM] Published: %s\n", msg);
-
-            obstacle_width_cm = 0.0f;
-            mqtt_fail_count = 0;
+            if (n > 0 && n < (int)sizeof msg) {
+                mqtt_app_publish("pico/telemetry", msg, 0, 0);
+                printf("[TELEM] Published: %s\n", msg);
+                mqtt_fail_count = 0;
+            } else {
+                printf("[TELEM] JSON truncated (len=%d)\n", n);
+            }
         }
         else
         {
             mqtt_fail_count++;
-            printf("[TELEM] MQTT not connected (fail #%d)\n", mqtt_fail_count);
+            if ((mqtt_fail_count % 10) == 1) {
+                printf("[TELEM] MQTT not connected (fail #%d)\n", mqtt_fail_count);
+            }
         }
 
+        // keep the task truly periodic
         vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
     }
 }
+
 
 // ===== Main =====
 int main()
