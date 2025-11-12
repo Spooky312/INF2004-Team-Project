@@ -206,10 +206,13 @@ static void pid_task(void *p)
         float speed_corr   = pid_compute_speed(target_speed, avg_rpm);
         float heading_corr = pid_compute_heading(heading_error);
 
-        // Heading correction: positive correction = turn left (slow right motor)
-        // negative correction = turn right (slow left motor)
-        float left_output  = direction * (target_speed + speed_corr + heading_corr);
-        float right_output = direction * (target_speed + speed_corr - heading_corr);
+    // Heading correction: positive correction => turn LEFT (make right motor
+    // faster than left). To achieve that, decrease left output and increase
+    // right output when heading_corr is positive.
+    // Apply per-side heading correction scale and motor trims to correct for
+    // physical asymmetry between the left and right motors/drive train.
+    float left_output  = direction * ((target_speed + speed_corr) - (heading_corr * HEADING_CORR_LEFT_SCALE)) * MOTOR_LEFT_TRIM;
+    float right_output = direction * ((target_speed + speed_corr) + (heading_corr * HEADING_CORR_RIGHT_SCALE)) * MOTOR_RIGHT_TRIM;
 
         // Debug output every PID_DEBUG_INTERVAL loops (from robot_config.h)
         if (++loop_count >= PID_DEBUG_INTERVAL) {

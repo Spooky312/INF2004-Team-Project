@@ -59,17 +59,27 @@
 // ============================================================================
 
 // ---- Speed PID Gains ----
-#define PID_KP_SPEED        0.45f   // Proportional gain for speed control
-#define PID_KI_SPEED        0.05f   // Integral gain for speed control
-#define PID_KD_SPEED        0.02f   // Derivative gain for speed control
-#define PID_SPEED_I_MAX     200.0f  // Anti-windup limit for speed integral
+// ---- Speed PID Gains (TUNED: slightly softer) ----
+// Slightly reduced KP and KI to avoid sudden large throttle changes
+// when large heading corrections are momentarily applied.
+#define PID_KP_SPEED        0.35f   // Proportional gain for speed control (reduced)
+#define PID_KI_SPEED        0.03f   // Integral gain for speed control (reduced)
+#define PID_KD_SPEED        0.02f   // Derivative gain for speed control (unchanged)
+// Lower integral cap to limit long-term speed correction magnitude
+#define PID_SPEED_I_MAX     100.0f  // Anti-windup limit for speed integral (reduced)
 
 // ---- Heading PID Gains ----
 // Tuned for smooth heading tracking with LSM303DLHC magnetometer
-#define PID_KP_HEADING      0.50f   // Proportional gain for heading control
-#define PID_KI_HEADING      0.02f   // Integral gain for heading control
-#define PID_KD_HEADING      0.15f   // Derivative gain for heading control
-#define PID_HEADING_I_MAX   50.0f   // Anti-windup limit for heading integral
+// ---- Heading PID Gains (TUNED: less aggressive, more damping) ----
+// These conservative values reduce overshoot and improve stability.
+// - Lower KP to reduce aggressive responses to heading error
+// - Much smaller KI to avoid wind-up on temporary large errors
+// - Increase KD to provide stronger damping of oscillations
+#define PID_KP_HEADING      0.25f   // Proportional gain for heading control (reduced)
+#define PID_KI_HEADING      0.005f  // Integral gain for heading control (reduced)
+#define PID_KD_HEADING      0.30f   // Derivative gain for heading control (increased)
+// Reduce integral max to limit long-term buildup
+#define PID_HEADING_I_MAX   20.0f   // Anti-windup limit for heading integral (reduced)
 
 // ============================================================================
 // IMU CONFIGURATION
@@ -100,11 +110,25 @@
 // ============================================================================
 // MOTOR CONTROL PARAMETERS
 // ============================================================================
-#define TARGET_SPEED        80.0f   // Default target speed (0-255)
+#define TARGET_SPEED        100.0f   // Default target speed (0-255)
                                     // Adjust based on your motors and battery
 
 #define MAX_MOTOR_SPEED     255.0f  // Maximum PWM speed value
 #define MIN_MOTOR_SPEED     0.0f    // Minimum PWM speed value
+
+// ---- Directional / motor trims (use these to correct asymmetry between
+//     left and right motors or to bias heading corrections per-side).
+//    Default values are 1.0 (no change). If your robot turns faster to the
+//    right than left, reduce the right trim slightly (e.g. 0.95) or increase
+//    the left trim (e.g. 1.05) until behavior is symmetric.
+#define MOTOR_LEFT_TRIM     1.0f    // Multiply left motor output
+#define MOTOR_RIGHT_TRIM    1.0f   // Multiply right motor output (reduced to correct faster right turns)
+
+// ---- Heading correction per-side scale. Sometimes you may prefer to scale
+//     the heading correction applied to each motor independently. Default
+//     is 1.0 (symmetric). Values >1 amplify the correction on that side.
+#define HEADING_CORR_LEFT_SCALE  1.10f
+#define HEADING_CORR_RIGHT_SCALE 1.0f
 
 // ============================================================================
 // TASK TIMING CONFIGURATION (FreeRTOS)
