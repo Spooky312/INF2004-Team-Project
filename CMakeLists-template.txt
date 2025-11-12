@@ -17,10 +17,14 @@ set(MQTT_SERVER_IP "192.168.43.1")  # Android hotspot default
 set(FREERTOS_KERNEL_PATH "C:/Users/iikod/FreeRTOS-Kernel")
 
 
-# --- Wi-Fi + MQTT (FreeRTOS variant) ---
-set(PICO_LWIP_FREERTOS 1)
+# --- Wi-Fi + MQTT (threadsafe background variant) ---
+# Use the threadsafe background cyw43 arch so the CYW43 coprocessor
+# handles Wi-Fi and lwIP runs in a background/threadsafe mode compatible
+# with NO_SYS=1 (project's `lwipopts.h`). This selects the SDK target
+# `pico_cyw43_arch_lwip_threadsafe_background`.
+set(PICO_LWIP_FREERTOS 0)
 set(PICO_LWIP_MQTT 1)
-set(PICO_CYW43_ARCH_DEFAULT lwip_sys_freertos)
+set(PICO_CYW43_ARCH_DEFAULT pico_cyw43_arch_lwip_threadsafe_background)
 
 # -----------------------------------------------
 # SDK Initialization
@@ -40,6 +44,10 @@ set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
 if(EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
+
+# Note: lwIP NO_SYS is configured via `lwipopts.h` in the project (NO_SYS=1)
+# Do not override it here — the Pico SDK and lwIP will use the project's
+# `lwipopts.h` configuration.
 
 set(PICO_BOARD pico_w CACHE STRING "Board type")
 
@@ -74,7 +82,9 @@ add_executable(INF2004-TEAM-PROJECT
     drivers/encoder/encoder.c
     drivers/imu/imu.c
     drivers/pid/pid.c
-    drivers/mqtt/wifi_mqtt.c
+    drivers/networking/networkManager.c
+    drivers/networking/mqtt/mqtt.c
+    drivers/networking/wifi/wifi.c
     drivers/debug_led/debug_led.c
     drivers/chg_direction/chg_direction.c
 )
@@ -88,7 +98,9 @@ target_include_directories(INF2004-TEAM-PROJECT PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/drivers/encoder
     ${CMAKE_CURRENT_LIST_DIR}/drivers/imu
     ${CMAKE_CURRENT_LIST_DIR}/drivers/pid
-    ${CMAKE_CURRENT_LIST_DIR}/drivers/mqtt
+    ${CMAKE_CURRENT_LIST_DIR}/drivers/networking
+    ${CMAKE_CURRENT_LIST_DIR}/drivers/networking/mqtt
+    ${CMAKE_CURRENT_LIST_DIR}/drivers/networking/wifi
     ${CMAKE_CURRENT_LIST_DIR}/drivers/debug_led
     ${CMAKE_CURRENT_LIST_DIR}/drivers/chg_direction
     # ${CMAKE_CURRENT_LIST_DIR}/drivers/mqtt
@@ -130,9 +142,9 @@ target_link_libraries(INF2004-TEAM-PROJECT
     hardware_gpio
     hardware_pwm
     hardware_i2c
-    pico_lwip_freertos
+    pico_lwip
     pico_lwip_mqtt
-    pico_cyw43_arch_lwip_sys_freertos
+    pico_cyw43_arch_lwip_threadsafe_background
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
 )
