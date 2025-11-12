@@ -25,7 +25,10 @@ bool wifi_init_and_connect(const char *ssid, const char *password) {
 
     if (rc) {
         printf("[WiFi] ❌ Connection failed (code=%d). Check credentials or signal.\n", rc);
-        cyw43_arch_deinit();
+        // Don't call cyw43_arch_deinit() here: removing the arch while other
+        // parts of the system (or ISR handlers) may still be registered has
+        // previously caused assertion failures in the SDK IRQ removal path.
+        // Keep the driver initialized so callers can retry connecting safely.
         return false;
     }
 
