@@ -3,14 +3,9 @@
 //  Description: PWM control for left and right DC motors.
 // ===============================================
 #include "motor.h"
+#include "robot_config.h"  // central pin/gain/config definitions
 
-// <-- FIX: Corrected comments to match defines
-// Motor A (left): GP8 (PWM), GP9 (DIR)
-// Motor B (right): GP10 (PWM), GP11 (DIR)
-#define MOTOR_R_PWM 10
-#define MOTOR_R_DIR 11
-#define MOTOR_L_PWM 8
-#define MOTOR_L_DIR 9
+// Motor pin numbers and trims come from robot_config.h. Do not redefine here.
 
 static uint slice_l, chan_l, slice_r, chan_r;
 

@@ -4,11 +4,7 @@
 // ===============================================
 #include "debug_led.h"
 #include "hardware/timer.h"
-
-#define STATUS_LED_PIN   25  // Onboard LED
-#define IMU_LED_PIN      19  // GP19 (available)
-#define ENCODER_LED_PIN  24  // GP24 (available)
-#define WIFI_LED_PIN     23  // GP23 (available)
+#include "robot_config.h"  // use centralized LED pin definitions
 
 void debug_led_init(void)
 {

@@ -5,9 +5,7 @@
 #ifndef ENCODER_H
 #define ENCODER_H
 
-#define ENCODER_LEFT_PIN   3
-#define ENCODER_RIGHT_PIN  26
-
+#include "robot_config.h"  // central pin definitions (ENCODER_LEFT_PIN etc.)
 #include "pico/stdlib.h"
 
 void encoder_init(void);

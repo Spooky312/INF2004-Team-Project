@@ -1,6 +1,7 @@
 #include "networkManager.h"
 #include "wifi.h"
 #include "mqtt.h"
+#include "robot_config.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdio.h>
@@ -13,7 +14,7 @@
 void network_manager_task(void *pvParameters) {
     printf("\n=== Network Manager Task ===\n");
 
-    if (!wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)) {
+    if (!wifi_init_and_connect(WIFI_SSID, WIFI_PASS)) {
         printf("[NET] Wi-Fi failed to connect.\n");
         vTaskDelete(NULL);
     }
