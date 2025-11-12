@@ -17,6 +17,21 @@
 // and units as shown. Comments include guidance and sensible starting values.
 // ---------------------------------------------------------------------------
 
+// --- WiFi & MQTT credentials (edit here for convenience)
+// Note: for CI/build automation you can override these using CMake -D flags.
+#ifndef WIFI_SSID
+#define WIFI_SSID "ssid-here"
+#endif
+
+#ifndef WIFI_PASS
+#define WIFI_PASS "pass-here"
+#endif
+
+#ifndef MQTT_SERVER_IP
+// Broker IP or hostname (default: local PC). Example: "192.168.1.100"
+#define MQTT_SERVER_IP "ip-here"
+#endif
+
 // --- Hardware pinout (change only if wiring changes) -----------------------
 // Motors
 #define MOTOR_L_PWM         10      // Left motor PWM (GP10)
@@ -123,21 +138,6 @@
 #define DEBUG_PID_VERBOSE   0
 #define DEBUG_IMU_VERBOSE   0
 #define DEBUG_ENCODER_VERBOSE 0
-
-// --- WiFi & MQTT credentials (edit here for convenience)
-// Note: for CI/build automation you can override these using CMake -D flags.
-#ifndef WIFI_SSID
-#define WIFI_SSID "ChngFamily"
-#endif
-
-#ifndef WIFI_PASS
-#define WIFI_PASS "Chng_1215"
-#endif
-
-#ifndef MQTT_SERVER_IP
-// Broker IP or hostname (default: local PC). Example: "192.168.1.100"
-#define MQTT_SERVER_IP "192.168.1.64"
-#endif
 
 // ---------------------------------------------------------------------------
 // END USER EDITABLE SECTION

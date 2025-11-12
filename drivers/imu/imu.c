@@ -4,8 +4,15 @@
 //               tilt/heading helpers, EMA-filtered heading.
 // ===============================================
 #include "imu.h"
+#include "robot_config.h"  // Centralized configuration
+#include "hardware/i2c.h"
 #include <math.h>
 #include <string.h>
+
+// I2C configuration now in robot_config.h:
+// - IMU_I2C_INST, IMU_I2C_SDA, IMU_I2C_SCL
+// - IMU_I2C_BAUD_HZ
+// - IMU_EMA_ALPHA
 
 // ---- LSM303DLHC I2C addresses ----
 #define LSM_ACC_ADDR         0x19   // SA0_A = 1 typical
@@ -25,11 +32,11 @@
 // ---- Helpers ----
 static inline int i2c_w1(uint8_t addr, uint8_t reg, uint8_t val) {
     uint8_t buf[2] = {reg, val};
-    return i2c_write_blocking(IMU_I2C, addr, buf, 2, false);
+    return i2c_write_blocking(IMU_I2C_INST, addr, buf, 2, false);
 }
 static inline int i2c_rn(uint8_t addr, uint8_t reg, uint8_t *dst, size_t n) {
-    i2c_write_blocking(IMU_I2C, addr, &reg, 1, true);
-    return i2c_read_blocking(IMU_I2C, addr, dst, n, false);
+    i2c_write_blocking(IMU_I2C_INST, addr, &reg, 1, true);
+    return i2c_read_blocking(IMU_I2C_INST, addr, dst, n, false);
 }
 
 // ---- State ----
@@ -44,7 +51,7 @@ static inline float clampf(float x, float lo, float hi){ return x<lo?lo:(x>hi?hi
 void imu_init(void)
 {
     // I2C pins + speed
-    i2c_init(IMU_I2C, IMU_I2C_BAUD_HZ);
+    i2c_init(IMU_I2C_INST, IMU_I2C_BAUD_HZ);
     gpio_set_function(IMU_I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(IMU_I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(IMU_I2C_SDA);
@@ -166,13 +173,32 @@ bool imu_get_heading_deg(float *heading_raw_deg, float *heading_filt_deg)
 
     float heading_deg = heading * 180.0f / (float)M_PI;
 
-    // EMA filter
+    // EMA filter using IMU_EMA_ALPHA from robot_config.h
     if (!ema_inited) {
         ema_heading_deg = heading_deg;
         ema_inited = true;
     } else {
-        ema_heading_deg = (IMU_HEADING_EMA_ALPHA * heading_deg)
-                        + (1.0f - IMU_HEADING_EMA_ALPHA) * ema_heading_deg;
+        // Handle wraparound: if difference > 180°, we crossed 0°/360° boundary
+        float diff = heading_deg - ema_heading_deg;
+        if (diff > 180.0f) {
+            diff -= 360.0f;
+        } else if (diff < -180.0f) {
+            diff += 360.0f;
+        }
+        
+        // Stronger outlier rejection: if change is > threshold in one reading, likely interference
+        // Threshold configured in robot_config.h (IMU_OUTLIER_THRESHOLD)
+        if (fabsf(diff) > IMU_OUTLIER_THRESHOLD) {
+            // Use previous filtered value, don't update
+            heading_deg = ema_heading_deg;
+        } else {
+            // Normal EMA update
+            ema_heading_deg += IMU_EMA_ALPHA * diff;
+            
+            // Normalize back to [0, 360)
+            if (ema_heading_deg < 0.0f) ema_heading_deg += 360.0f;
+            if (ema_heading_deg >= 360.0f) ema_heading_deg -= 360.0f;
+        }
     }
 
     if (heading_raw_deg)  *heading_raw_deg  = heading_deg;

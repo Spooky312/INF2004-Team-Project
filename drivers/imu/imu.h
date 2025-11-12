@@ -8,7 +8,17 @@
 
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
-#include "robot_config.h"  // canonical IMU pins, EMA alpha, etc.
+
+// NOTE: Pin and parameter configuration moved to robot_config.h
+// Include that file in your .c files for:
+// - IMU_I2C_INST, IMU_I2C_SDA, IMU_I2C_SCL
+// - IMU_I2C_BAUD_HZ
+// - IMU_EMA_ALPHA
+
+// Magnetic declination in radians (set for your location; 0 for demo)
+#ifndef IMU_DECLINATION_RAD
+#define IMU_DECLINATION_RAD  0.0f
+#endif
 
 // ---- Public API ----
 void  imu_init(void);
